@@ -20,34 +20,22 @@ type SlogLogger struct {
 
 // Debug forwards to slog.Logger.DebugContext.
 func (s SlogLogger) Debug(ctx context.Context, msg string, args ...any) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	s.L.DebugContext(ctx, msg, args...)
+	s.L.DebugContext(ensureCtx(ctx), msg, args...)
 }
 
 // Info forwards to slog.Logger.InfoContext.
 func (s SlogLogger) Info(ctx context.Context, msg string, args ...any) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	s.L.InfoContext(ctx, msg, args...)
+	s.L.InfoContext(ensureCtx(ctx), msg, args...)
 }
 
 // Warn forwards to slog.Logger.WarnContext.
 func (s SlogLogger) Warn(ctx context.Context, msg string, args ...any) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	s.L.WarnContext(ctx, msg, args...)
+	s.L.WarnContext(ensureCtx(ctx), msg, args...)
 }
 
 // Error forwards to slog.Logger.ErrorContext.
 func (s SlogLogger) Error(ctx context.Context, msg string, args ...any) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	s.L.ErrorContext(ctx, msg, args...)
+	s.L.ErrorContext(ensureCtx(ctx), msg, args...)
 }
 
 // With returns a new SlogLogger whose underlying *slog.Logger has the given
@@ -56,6 +44,15 @@ func (s SlogLogger) Error(ctx context.Context, msg string, args ...any) {
 // these attributes in every log record it produces.
 func (s SlogLogger) With(args ...any) Logger {
 	return SlogLogger{L: s.L.With(args...)}
+}
+
+// ensureCtx returns ctx if non-nil, otherwise context.Background(). This
+// prevents nil-context panics in slog handlers.
+func ensureCtx(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 // Compile-time assertion: SlogLogger implements Logger.

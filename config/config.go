@@ -45,3 +45,16 @@ type ReadWatcher interface {
 	Reader
 	Watcher
 }
+
+// ValueWatcher provides push-mode configuration change notifications.
+// Unlike [Watcher] which only signals that a value changed (requiring a
+// follow-up [Reader.Load] call), ValueWatcher delivers the new value
+// directly on the channel. This is an optional interface — providers that
+// only support signal-mode notifications implement [Watcher] and leave this
+// to those that can efficiently deliver changed values.
+type ValueWatcher interface {
+	// WatchValue returns a channel that receives the new raw value each
+	// time the data associated with key changes. The channel is closed when
+	// the watcher is stopped or ctx is cancelled.
+	WatchValue(ctx context.Context, key string) (<-chan []byte, error)
+}

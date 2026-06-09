@@ -107,12 +107,7 @@ app := wind.New(
 )
 
 // 注册中心、日志、配置——全部由你组装，框架不做任何假设
-inst := &wind.Instance{
-    ID:        app.ID(),
-    Name:      app.Name(),
-    Version:   app.Version(),
-    Endpoints: []string{"grpc://0.0.0.0:9000"},
-}
+inst := app.Instance("grpc://0.0.0.0:9000")
 
 // 使用你选的注册中心实现
 registrar.Register(ctx, inst)
@@ -129,8 +124,32 @@ import windlog "github.com/tx7do/go-wind/log"
 // 使用内置 slog 适配器
 windlog.SetLogger(windlog.NewSlogLogger())
 
+// 级别过滤：仅输出 WARN 及以上
+filtered := windlog.LevelFilter{
+    Logger: windlog.NewSlogLogger(),
+    Level:  windlog.LevelWarn,
+}
+windlog.SetLogger(filtered)
+
 // 或者适配你自己的日志后端
 windlog.SetLogger(myZapAdapter{})
+```
+
+### 高级配置
+
+```go
+app := wind.New(
+    wind.WithServer(grpcServer),
+    wind.WithStopTimeout(30*time.Second),  // 自定义优雅停机超时
+    wind.WithSignal(syscall.SIGTERM),       // 自定义信号
+    wind.WithLogger(myLogger),              // App 级别独立日志器
+)
+
+// App 级别日志器，未设置时回退到全局 logger
+app.Logger().Info(ctx, "starting")
+
+// 等待 App 结束（可用于外部编排）
+<-app.Done()
 ```
 
 ---
@@ -155,8 +174,8 @@ go-wind/
 ├── instance.go         服务实例模型 & Context 绑定
 ├── transport/          传输层抽象（Server / Transporter）
 ├── registry/           服务注册与发现抽象（Registrar / Discovery）
-├── config/             配置源抽象（Reader / Watcher / ReadWatcher）
-└── log/                日志门面（Logger 接口 + slog 适配 + nop 实现）
+├── config/             配置源抽象（Reader / ReadCloser / Watcher / ValueWatcher）
+└── log/                日志门面（Logger 接口 + LevelFilter + slog 适配 + nop 实现）
 ```
 
 ### 模块总览
@@ -168,8 +187,8 @@ go-wind/
 | `wind` | `Metadata` | 请求级元数据（TraceID 等）链路传播 |
 | `transport` | `Server`, `Transporter` | 传输层抽象，支持任意协议接入 |
 | `registry` | `Registrar`, `Discovery`, `Watcher` | 服务注册、发现与变更监听 |
-| `config` | `Reader`, `Watcher`, `ReadWatcher` | 配置读取、热更新监听 |
-| `log` | `Logger` | 日志门面，适配任意后端 |
+| `config` | `Reader`, `ReadCloser`, `Watcher`, `ValueWatcher` | 配置读取、热更新监听 |
+| `log` | `Logger`, `LevelFilter` | 日志门面，适配任意后端；级别过滤包装器 |
 
 ---
 

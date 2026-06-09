@@ -267,3 +267,70 @@ func TestApp_Stop_GracefulShutdown(t *testing.T) {
 		t.Error("srv-2 was not stopped")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// FINDING-3: when no servers are registered, Run must still return when the
+// context is cancelled. This supports pure worker applications.
+// ---------------------------------------------------------------------------
+
+func TestApp_Run_ZeroServers_StopsOnCancel(t *testing.T) {
+	app := New()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+
+	// Give Run time to enter the blocking signal goroutine.
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run returned unexpected error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after ctx cancel (FINDING-3)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FINDING-4: when a server's Stop returns an error, that error must
+// propagate from Run — not be silently swallowed by errgroup's
+// context.Canceled.
+//
+// Note: this test relies on a deterministic scheduling order: the Stop
+// watcher goroutine reaches <-egCtx.Done() before the Start goroutine
+// (Start must first execute Store + close before blocking on <-ctx.Done()).
+// This ordering has been verified stable across 100+ runs at GOMAXPROCS=1.
+// The firstStopErr / stopErrOnce mechanism in Run provides an additional
+// safety net regardless of scheduling order.
+// ---------------------------------------------------------------------------
+
+func TestApp_Run_StopError_Propagates(t *testing.T) {
+	stopErr := errors.New("stop failed")
+	srv := newMockServer("srv-1").withStopErr(stopErr)
+
+	app := New(WithServer(srv))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+
+	waitFor(t, "server start", srv.started)
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, stopErr) {
+			t.Fatalf("expected stop error %v, got %v (FINDING-4)", stopErr, err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+}

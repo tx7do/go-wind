@@ -107,12 +107,7 @@ app := wind.New(
 )
 
 // Registry, logging, config — all assembled by you; the framework makes no assumptions
-inst := &wind.Instance{
-    ID:        app.ID(),
-    Name:      app.Name(),
-    Version:   app.Version(),
-    Endpoints: []string{"grpc://0.0.0.0:9000"},
-}
+inst := app.Instance("grpc://0.0.0.0:9000")
 
 // Use your chosen registry implementation
 registrar.Register(ctx, inst)
@@ -129,8 +124,32 @@ import windlog "github.com/tx7do/go-wind/log"
 // Use the built-in slog adapter
 windlog.SetLogger(windlog.NewSlogLogger())
 
+// Level filtering: only WARN and above
+filtered := windlog.LevelFilter{
+    Logger: windlog.NewSlogLogger(),
+    Level:  windlog.LevelWarn,
+}
+windlog.SetLogger(filtered)
+
 // Or adapt your own logging backend
 windlog.SetLogger(myZapAdapter{})
+```
+
+### Advanced Configuration
+
+```go
+app := wind.New(
+    wind.WithServer(grpcServer),
+    wind.WithStopTimeout(30*time.Second),  // custom graceful shutdown timeout
+    wind.WithSignal(syscall.SIGTERM),       // custom signal set
+    wind.WithLogger(myLogger),              // app-level logger
+)
+
+// App-level logger; falls back to the global logger if not set
+app.Logger().Info(ctx, "starting")
+
+// Wait for the app to finish (useful for external supervision)
+<-app.Done()
 ```
 
 ---
@@ -155,8 +174,8 @@ go-wind/
 ├── instance.go         Service instance model & context binding
 ├── transport/          Transport abstraction (Server / Transporter)
 ├── registry/           Service registration & discovery abstraction (Registrar / Discovery)
-├── config/             Config source abstraction (Reader / Watcher / ReadWatcher)
-└── log/                Log facade (Logger interface + slog adapter + nop impl)
+├── config/             Config source abstraction (Reader / ReadCloser / Watcher / ValueWatcher)
+└── log/                Log facade (Logger interface + LevelFilter + slog adapter + nop impl)
 ```
 
 ### Module Overview
@@ -168,8 +187,8 @@ go-wind/
 | `wind` | `Metadata` | Request-scoped metadata (TraceID etc.) propagation |
 | `transport` | `Server`, `Transporter` | Transport-layer abstraction for any protocol |
 | `registry` | `Registrar`, `Discovery`, `Watcher` | Service registration, discovery & change watch |
-| `config` | `Reader`, `Watcher`, `ReadWatcher` | Config loading & hot-reload watching |
-| `log` | `Logger` | Logging facade adaptable to any backend |
+| `config` | `Reader`, `ReadCloser`, `Watcher`, `ValueWatcher` | Config loading & hot-reload watching |
+| `log` | `Logger`, `LevelFilter` | Logging facade adaptable to any backend; level-filter wrapper |
 
 ---
 

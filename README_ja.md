@@ -107,12 +107,7 @@ app := wind.New(
 )
 
 // レジストリ、ログ、設定 — すべてあなたが組み立てる
-inst := &wind.Instance{
-    ID:        app.ID(),
-    Name:      app.Name(),
-    Version:   app.Version(),
-    Endpoints: []string{"grpc://0.0.0.0:9000"},
-}
+inst := app.Instance("grpc://0.0.0.0:9000")
 
 // 選択したレジストリ実装を使用
 registrar.Register(ctx, inst)
@@ -129,8 +124,32 @@ import windlog "github.com/tx7do/go-wind/log"
 // 組み込みの slog アダプターを使用
 windlog.SetLogger(windlog.NewSlogLogger())
 
+// レベルフィルタリング：WARN 以上のみ出力
+filtered := windlog.LevelFilter{
+    Logger: windlog.NewSlogLogger(),
+    Level:  windlog.LevelWarn,
+}
+windlog.SetLogger(filtered)
+
 // または独自のログバックエンドを適応
 windlog.SetLogger(myZapAdapter{})
+```
+
+### 高度な設定
+
+```go
+app := wind.New(
+    wind.WithServer(grpcServer),
+    wind.WithStopTimeout(30*time.Second),  // グレースフルシャットダウンのタイムアウト
+    wind.WithSignal(syscall.SIGTERM),       // カスタムシグナル
+    wind.WithLogger(myLogger),              // App レベルのロガー
+)
+
+// App レベルロガー、未設定時はグローバルロガーにフォールバック
+app.Logger().Info(ctx, "starting")
+
+// App の終了を待機（外部監視に利用可能）
+<-app.Done()
 ```
 
 ---
@@ -155,8 +174,8 @@ go-wind/
 ├── instance.go         サービスインスタンスモデル & context バインディング
 ├── transport/          トランスポート抽象化（Server / Transporter）
 ├── registry/           サービス登録・発見の抽象化（Registrar / Discovery）
-├── config/             設定ソース抽象化（Reader / Watcher / ReadWatcher）
-└── log/                ログファサード（Logger インターフェース + slog アダプター + nop 実装）
+├── config/             設定ソース抽象化（Reader / ReadCloser / Watcher / ValueWatcher）
+└── log/                ログファサード（Logger インターフェース + LevelFilter + slog アダプター + nop 実装）
 ```
 
 ### モジュール概要
@@ -168,8 +187,8 @@ go-wind/
 | `wind` | `Metadata` | リクエストスコープメタデータ（TraceID 等）の伝播 |
 | `transport` | `Server`, `Transporter` | トランスポート層の抽象化、任意プロトコル対応 |
 | `registry` | `Registrar`, `Discovery`, `Watcher` | サービス登録、発見、変更監視 |
-| `config` | `Reader`, `Watcher`, `ReadWatcher` | 設定読み込み & ホットリロード監視 |
-| `log` | `Logger` | ログファサード、任意バックエンドに適応可能 |
+| `config` | `Reader`, `ReadCloser`, `Watcher`, `ValueWatcher` | 設定読み込み & ホットリロード監視 |
+| `log` | `Logger`, `LevelFilter` | ログファサード、任意バックエンドに適応可能；レベルフィルターラッパー |
 
 ---
 

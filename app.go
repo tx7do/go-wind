@@ -20,6 +20,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/tx7do/go-wind/log"
 	"github.com/tx7do/go-wind/transport"
 )
 
@@ -56,6 +57,8 @@ type options struct {
 	name    string
 	version string
 
+	logger log.Logger
+
 	sigs        []os.Signal
 	stopTimeout time.Duration
 
@@ -76,6 +79,14 @@ func WithName(name string) Option {
 // WithVersion sets the semantic version of the application.
 func WithVersion(version string) Option {
 	return func(o *App) { o.opts.version = version }
+}
+
+// WithLogger sets an app-specific [log.Logger]. If not set, [App.Logger]
+// falls back to the package-level global logger ([log.GetLogger]).
+// This allows callers to give each [*App] instance its own logger without
+// affecting the global state.
+func WithLogger(l log.Logger) Option {
+	return func(o *App) { o.opts.logger = l }
 }
 
 // WithServer attaches one or more [transport.Server] instances to the [App].
@@ -127,6 +138,15 @@ func (a *App) Name() string { return a.opts.name }
 
 // Version returns the application version set via [WithVersion].
 func (a *App) Version() string { return a.opts.version }
+
+// Logger returns the app-specific logger set via [WithLogger]. If no logger
+// was set, it falls back to the package-level global logger ([log.GetLogger]).
+func (a *App) Logger() log.Logger {
+	if a.opts.logger != nil {
+		return a.opts.logger
+	}
+	return log.GetLogger()
+}
 
 // Instance builds an [*Instance] from the app's configured ID, Name and
 // Version, plus the provided endpoint URLs. This is a convenience helper for

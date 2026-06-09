@@ -17,13 +17,13 @@ type Instance struct {
 // an [*Instance] without collisions with other context values.
 type instanceKey struct{}
 
-// NewInstanceContext returns a copy of ctx with the given [*Instance] attached.
-func NewInstanceContext(ctx context.Context, inst *Instance) context.Context {
+// WithInstance returns a copy of ctx with the given [*Instance] attached.
+func WithInstance(ctx context.Context, inst *Instance) context.Context {
 	return context.WithValue(ctx, instanceKey{}, inst)
 }
 
-// FromInstanceContext extracts the [*Instance] from ctx, if present.
-func FromInstanceContext(ctx context.Context) (*Instance, bool) {
+// InstanceFromContext extracts the [*Instance] from ctx, if present.
+func InstanceFromContext(ctx context.Context) (*Instance, bool) {
 	inst, ok := ctx.Value(instanceKey{}).(*Instance)
 	return inst, ok
 }

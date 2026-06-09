@@ -19,13 +19,13 @@ type metadataKey struct{}
 // request-scoped attributes.
 type Metadata map[string]string
 
-// NewContext returns a copy of ctx with the given [Metadata] attached.
-func NewContext(ctx context.Context, md Metadata) context.Context {
+// NewMetadataContext returns a copy of ctx with the given [Metadata] attached.
+func NewMetadataContext(ctx context.Context, md Metadata) context.Context {
 	return context.WithValue(ctx, metadataKey{}, md)
 }
 
-// FromContext extracts the [Metadata] from ctx, if present.
-func FromContext(ctx context.Context) (Metadata, bool) {
+// MetadataFromContext extracts the [Metadata] from ctx, if present.
+func MetadataFromContext(ctx context.Context) (Metadata, bool) {
 	md, ok := ctx.Value(metadataKey{}).(Metadata)
 	return md, ok
 }
@@ -33,7 +33,7 @@ func FromContext(ctx context.Context) (Metadata, bool) {
 // GetMetadata returns the value for key from the context's [Metadata].
 // It returns an empty string when the key is absent or no metadata exists.
 func GetMetadata(ctx context.Context, key string) string {
-	if md, ok := FromContext(ctx); ok {
+	if md, ok := MetadataFromContext(ctx); ok {
 		return md[key]
 	}
 	return ""
@@ -46,7 +46,7 @@ func GetMetadata(ctx context.Context, key string) string {
 // concurrent write races when the parent context is shared across goroutines
 // (BUG-2 regression guard).
 func WithMetadata(ctx context.Context, key, value string) context.Context {
-	md, ok := FromContext(ctx)
+	md, ok := MetadataFromContext(ctx)
 	if !ok {
 		md = make(Metadata)
 	} else {
@@ -55,7 +55,7 @@ func WithMetadata(ctx context.Context, key, value string) context.Context {
 		md = cloneMetadata(md)
 	}
 	md[key] = value
-	return NewContext(ctx, md)
+	return NewMetadataContext(ctx, md)
 }
 
 // WithTraceID returns a new context with the given trace ID set in its
