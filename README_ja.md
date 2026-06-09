@@ -16,7 +16,7 @@
 
 > **オールインワンではなく、ブロックの箱。**
 
-go-wind は Go のネイティブな哲学を掲げています：**継承より合成、実装よりインターフェース。** フレームワークはプロトコルとライフサイクルの骨組みのみを定義し、インフラストラクチャへの依存は一切ありません。各モジュール（トランスポート、レジストリ、設定、ログ）は最小限のインターフェースを公開し、利用者がレゴブロックのように組み立てます。
+go-wind は Go のネイティブな哲学を掲げています：**継承より合成、実装よりインターフェース。** フレームワークはプロトコルとライフサイクルの骨組みのみを定義し、インフラストラクチャへの依存は一切ありません。各モジュール（トランスポート、レジストリ、ログ）は最小限のインターフェースを公開し、利用者がレゴブロックのように組み立てます。
 
 | オールインワンフレームワーク | go-wind |
 |:---:|:---:|
@@ -29,10 +29,10 @@ go-wind は Go のネイティブな哲学を掲げています：**継承より
 
 ## 主要機能
 
-- **コンポーザブルな組み立て** — 4つのモジュール（トランスポート / レジストリ / 設定 / ログ）は完全にインターフェースベースで、ハードコードされた依存関係はゼロ
+- **コンポーザブルな組み立て** — コアはライフサイクルのみ管理、transport/log は最小インターフェースのみ公開。レジストリ、設定センター等は [go-wind-plugins](https://github.com/tx7do/go-wind-plugins) が具体的な実装を提供
 - **グレースフルなライフサイクル** — シグナル検知、タイムアウト制御付きサーバー起動/停止；単一サーバーのクラッシュが全サーバーのグレースフルシャットダウンをカスケード
 - **非侵入型 Context** — TraceID / UserID / ColorTag は context 経由で伝播、data race を防ぐためディープコピーを実施
-- **ミニマルログファサード** — 4メソッドインターフェース + `With`、slog / zap / zerolog / kratos log を数行で適応可能
+- **ミニマルログファサード** — 4メソッドインターフェース + `Enabled` + `With`、数行で slog / zap / zerolog / kratos log を適応可能。具象アダプター（slog adapter、LevelFilter、MultiLogger）は [go-wind-plugins](https://github.com/tx7do/go-wind-plugins) が提供
 - **関数型オプション** — `WithServer`、`WithName`… チェーン可能、型安全、可読性が高い
 - **外部依存ゼロ** — `golang.org/x/sync` のみ、フレームワーク本体は500行未満
 
@@ -72,6 +72,10 @@ func (s *MyServer) Stop(ctx context.Context) error {
     return nil
 }
 
+func (s *MyServer) Endpoint() string {
+    return "grpc://0.0.0.0:9000"
+}
+
 func main() {
     app := wind.New(
         wind.WithID("order-service-01"),
@@ -98,7 +102,7 @@ app := wind.New(
 app.Run(ctx)
 ```
 
-### レジストリのコンポーザブルな組み立て
+### サービスインスタンス構築
 
 ```go
 app := wind.New(
@@ -106,12 +110,9 @@ app := wind.New(
     wind.WithServer(grpcServer),
 )
 
-// レジストリ、ログ、設定 — すべてあなたが組み立てる
+// 選択したレジストリ実装（go-wind-plugins）に登録するためのインスタンスを構築
 inst := app.Instance("grpc://0.0.0.0:9000")
-
-// 選択したレジストリ実装を使用
-registrar.Register(ctx, inst)
-defer registrar.Deregister(ctx, inst)
+// inst.ID / inst.Name / inst.Version / inst.Endpoints
 
 app.Run(ctx)
 ```
@@ -121,32 +122,22 @@ app.Run(ctx)
 ```go
 import windlog "github.com/tx7do/go-wind/log"
 
-// 組み込みの slog アダプターを使用
-windlog.SetLogger(windlog.NewSlogLogger())
+// 方式1: log.Logger インターフェースを実装して、独自のバックエンドを適応
+// 具象アダプター（slog adapter、LevelFilter、MultiLogger）は go-wind-plugins が提供
+windlog.SetLogger(myZapAdapter{})
 
-// レベルフィルタリング：WARN 以上のみ出力
-filtered := windlog.LevelFilter{
-    Logger: windlog.NewSlogLogger(),
-    Level:  windlog.LevelWarn,
-}
-windlog.SetLogger(filtered)
+// 方式2: go-wind-plugins/log/slog のアダプターを使用
+//   import pluginslog "github.com/tx7do/go-wind-plugins/log/slog"
+//   windlog.SetLogger(pluginslog.New(mySlogLogger))
 
-// 複数宛先ファンアウト：stderr とリモートコレクターに同時出力
-multi := windlog.MultiLogger{
-    Loggers: []windlog.Logger{
-        windlog.NewSlogLogger(),
-        myRemoteLogger,
-    },
-}
-windlog.SetLogger(multi)
+// App レベルロガー、未設定時はグローバルロガーにフォールバック
+app.Logger().Info(ctx, "starting")
 
 // 高コストな引数構築を Enabled でガード
+logger := app.Logger()
 if logger.Enabled(windlog.LevelDebug) {
     logger.Debug(ctx, "detail", computeExpensiveData())
 }
-
-// または独自のログバックエンドを適応
-windlog.SetLogger(myZapAdapter{})
 ```
 
 ### 高度な設定
@@ -159,7 +150,8 @@ app := wind.New(
     wind.WithLogger(myLogger),              // App レベルのロガー
     wind.WithBeforeStop(func(ctx context.Context) error {
         // シャットダウン前フック：サービス登録解除、リクエストキューのドレイン
-        return registrar.Deregister(ctx, inst)
+        // 選択したレジストリ実装（go-wind-plugins）を使用
+        return nil
     }),
     wind.WithAfterStop(func(ctx context.Context) error {
         // シャットダウン後フック：DB接続のクローズ、バッファのフラッシュ
@@ -175,32 +167,33 @@ endpoint := grpcServer.Endpoint()
 
 // App の終了を待機（外部監視に利用可能）
 <-app.Done()
+// Run の最終エラーを取得（Done クローズ後に呼び出し可能）
+if err := app.Err(); err != nil {
+    log.Fatal(err)
+}
 ```
 
 ---
 
 ## モジュールアーキテクチャ
 
-```mermaid
+```
 graph LR
     APP["wind.App<br/>ライフサイクル編成"]
     APP -->|"管理"| SERVER["transport.Server<br/>インターフェース契約"]
-    APP -.->|"利用者が組み立て"| REG["registry<br/>Registrar / Discovery"]
-    APP -.->|"利用者が組み立て"| CFG["config<br/>Reader / Watcher"]
-    APP -.->|"利用者が組み立て"| LOG["log<br/>Logger"]
+    APP -.->|"グローバル fallback"| LOG["log.Logger<br/>インターフェース（組み込み実装なし）"]
 ```
 
-> 破線はフレームワークが強制バインドしないことを示します。利用者が自由に組み立てます。
+> コアは Server ライフサイクルのみ管理。ログはインターフェース + グローバル登録器のみ提供。レジストリ、設定センター等は [go-wind-plugins](https://github.com/tx7do/go-wind-plugins) が提供。
 
-```text
+```
 go-wind/
 ├── app.go              コアエンジン：App ライフサイクル管理
+├── errors.go           エラー定義の一元管理
 ├── context.go          リクエストスコープメタデータ伝播（TraceID / UserID / Metadata）
-├── instance.go         サービスインスタンスモデル & context バインディング
-├── transport/          トランスポート抽象化（Server / Transporter）
-├── registry/           サービス登録・発見の抽象化（Registrar / Discovery）
-├── config/             設定ソース抽象化（Reader / ReadCloser / Watcher / ValueWatcher）
-└── log/                ログファサード（Logger インターフェース + LevelFilter + slog アダプター + nop 実装）
+├── instance.go         サービスインスタンスモデル
+├── transport/          トランスポート抽象化（Server）
+└── log/                ログファサード（Logger インターフェース + Level + nop 実装 + グローバル登録器）
 ```
 
 ### モジュール概要
@@ -208,12 +201,10 @@ go-wind/
 | モジュール | コアインターフェース | 責務 |
 |:---|:---|:---|
 | `wind` | `App`, `Option` | アプリケーションライフサイクル編成、グレースフルシャットダウン |
-| `wind` | `Instance` | サービスインスタンスモデリング、context 伝播 |
+| `wind` | `Instance` | サービスインスタンスモデリング |
 | `wind` | `Metadata` | リクエストスコープメタデータ（TraceID 等）の伝播 |
-| `transport` | `Server`, `Transporter` | トランスポート層の抽象化、任意プロトコル対応 |
-| `registry` | `Registrar`, `Discovery`, `Watcher` | サービス登録、発見、変更監視 |
-| `config` | `Reader`, `ReadCloser`, `Watcher`, `ValueWatcher` | 設定読み込み & ホットリロード監視 |
-| `log` | `Logger`, `LevelFilter`, `MultiLogger` | ログファサード、任意バックエンドに適応可能；レベルフィルターと複数宛先ファンアウト |
+| `transport` | `Server` | トランスポート層の抽象化、任意プロトコル対応 |
+| `log` | `Logger`, `Level` | ログインターフェース契約 + グローバル登録器。アダプターは plugins が提供 |
 
 ---
 
@@ -221,22 +212,33 @@ go-wind/
 
 go-wind のコア機能は **信頼性の高いアプリケーションライフサイクル管理** です：
 
-```mermaid
+```
 graph TB
-    S1["srv.Start"] --> EG
-    S2["srv.Start"] --> EG
-    S3["srv.Start"] --> EG
-    EG["errgroup (egCtx)"]
+    subgraph Phase 1: Start
+        S1["srv.Start"] --> EG
+        S2["srv.Start"] --> EG
+        S3["srv.Start"] --> EG
+    end
 
     SIG["シグナル受信<br/>SIGTERM / SIGINT / SIGQUIT"] --> TC
     CTX["ctx キャンセル"] --> TC
     CRASH["サーバークラッシュ / 終了"] --> TC
 
-    TC["triggerCancel()"] -->|"キャンセル"| EG
+    TC["triggerCancel()"] -->|"キャンセル"| EG["errgroup<br/>egCtx"]
 
-    EG --> Stop1["srv.Stop<br/>独立タイムアウト Ctx"]
-    EG --> Stop2["srv.Stop<br/>独立タイムアウト Ctx"]
-    EG --> Stop3["srv.Stop<br/>独立タイムアウト Ctx"]
+    EG --> P2["Phase 2: BeforeStop フック<br/>同期実行、Stop より先"]
+    P2 --> P3
+
+    subgraph Phase 3: Server.Stop
+        P3["並行 Stop"]
+        P3 --> Stop1["srv.Stop<br/>独立タイムアウト Ctx"]
+        P3 --> Stop2["srv.Stop<br/>独立タイムアウト Ctx"]
+        P3 --> Stop3["srv.Stop<br/>独立タイムアウト Ctx"]
+    end
+
+    Stop1 --> P4["Phase 4: AfterStop フック<br/>同期実行、Stop の後"]
+    Stop2 --> P4
+    Stop3 --> P4
 ```
 
 **設計のポイント：**
@@ -247,8 +249,9 @@ graph TB
 | クラッシュカスケード | サーバーのクラッシュまたは自己終了が errgroup 経由で他の全サーバーのグレースフルシャットダウンを自動トリガー |
 | ダブルストップ防止 | `App.Stop()` はキャンセルのみをトリガーし、`Server.Stop()` を直接呼び出しません — シャットダウンロジックは一元化 |
 | シグナル検知 | デフォルトで `SIGTERM` / `SIGINT` / `SIGQUIT` を監視、完全にカスタマイズ可能 |
-| ライフサイクルフック | `WithBeforeStop` / `WithAfterStop` がシャットダウン前/後にカスタムクリーンアップコールバックを実行 — 利用者が組み立て |
+| ライフサイクルフック | `WithBeforeStop` / `WithAfterStop` が段階的順序で実行：BeforeStop → Server.Stop → AfterStop、各フェーズに独立タイムアウトコンテキスト |
 | Server.Endpoint | Server 実装が実際のリスニングアドレスを公開、`:0` ランダムポートバインディング後のレジストリ登録をサポート |
+| App.Err | `App.Err()` は `Done()` クローズ後に Run の最終エラーを返し、外部監視が結果を把握可能 |
 
 ---
 

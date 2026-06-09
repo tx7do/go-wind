@@ -3,8 +3,8 @@
 //
 // It defines a small [Logger] interface that any project can adapt to its own
 // backend (stdlib *slog.Logger, zap, zerolog, kratos log, …) with a few lines
-// of glue code. A reference [SlogLogger] implementation and a zero-cost
-// [nopLogger] are included.
+// of glue code. A zero-cost [nopLogger] is included as the default; concrete
+// adapters (slog, LevelFilter, MultiLogger) live in go-wind-plugins.
 package log
 
 import "context"

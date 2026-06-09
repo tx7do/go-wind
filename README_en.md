@@ -16,7 +16,7 @@ Lego-like Architecture · Interface-Driven · Zero Magic · Production-Ready
 
 > **Not a bundled framework — a box of building blocks.**
 
-go-wind embraces the native Go philosophy: **composition over inheritance, interfaces over implementations.** The framework defines only protocols and lifecycle scaffolding — no infrastructure is hard-wired. Every module (transport, registry, config, logging) exposes a minimal interface; callers assemble them like Lego bricks.
+go-wind embraces the native Go philosophy: **composition over inheritance, interfaces over implementations.** The framework defines only protocols and lifecycle scaffolding — no infrastructure is hard-wired. Every module (transport, registry, logging) exposes a minimal interface; callers assemble them like Lego bricks.
 
 | Bundled Frameworks | go-wind |
 |:---:|:---:|
@@ -29,10 +29,10 @@ go-wind embraces the native Go philosophy: **composition over inheritance, inter
 
 ## Key Features
 
-- **Composable Assembly** — Four modules (transport / registry / config / logging) are fully interface-based with zero hard-coded dependencies
+- **Composable Assembly** — Core manages lifecycle only; transport/log expose minimal interfaces. Config, registry, and other capabilities are provided by [go-wind-plugins](https://github.com/tx7do/go-wind-plugins)
 - **Graceful Lifecycle** — Signal-aware, timeout-controlled server start/stop; a single server crash cascades a full graceful shutdown
 - **Non-Intrusive Context** — TraceID / UserID / ColorTag propagated via context with deep-copy to prevent data races
-- **Minimal Log Facade** — 4-method interface + `With`; adapt slog / zap / zerolog / kratos log in a few lines
+- **Minimal Log Facade** — 4-method interface + `Enabled` + `With`; adapt slog / zap / zerolog / kratos log in a few lines. Concrete adapters (slog adapter, LevelFilter, MultiLogger) are provided by [go-wind-plugins](https://github.com/tx7do/go-wind-plugins)
 - **Functional Options** — `WithServer`, `WithName`… chainable, type-safe, readable configuration
 - **Zero External Dependencies** — Only `golang.org/x/sync`; the framework itself is under 500 lines
 
@@ -72,6 +72,10 @@ func (s *MyServer) Stop(ctx context.Context) error {
     return nil
 }
 
+func (s *MyServer) Endpoint() string {
+    return "grpc://0.0.0.0:9000"
+}
+
 func main() {
     app := wind.New(
         wind.WithID("order-service-01"),
@@ -98,7 +102,7 @@ app := wind.New(
 app.Run(ctx)
 ```
 
-### Composable Registry Assembly
+### Service Instance
 
 ```go
 app := wind.New(
@@ -106,12 +110,9 @@ app := wind.New(
     wind.WithServer(grpcServer),
 )
 
-// Registry, logging, config — all assembled by you; the framework makes no assumptions
+// Build a service instance for your chosen registry implementation (go-wind-plugins)
 inst := app.Instance("grpc://0.0.0.0:9000")
-
-// Use your chosen registry implementation
-registrar.Register(ctx, inst)
-defer registrar.Deregister(ctx, inst)
+// inst.ID / inst.Name / inst.Version / inst.Endpoints
 
 app.Run(ctx)
 ```
@@ -121,32 +122,22 @@ app.Run(ctx)
 ```go
 import windlog "github.com/tx7do/go-wind/log"
 
-// Use the built-in slog adapter
-windlog.SetLogger(windlog.NewSlogLogger())
+// Option 1: implement log.Logger to adapt your own backend (slog / zap / zerolog…)
+// Concrete adapters (slog adapter, LevelFilter, MultiLogger) are in go-wind-plugins
+windlog.SetLogger(myZapAdapter{})
 
-// Level filtering: only WARN and above
-filtered := windlog.LevelFilter{
-    Logger: windlog.NewSlogLogger(),
-    Level:  windlog.LevelWarn,
-}
-windlog.SetLogger(filtered)
+// Option 2: use the adapter from go-wind-plugins/log/slog
+//   import pluginslog "github.com/tx7do/go-wind-plugins/log/slog"
+//   windlog.SetLogger(pluginslog.New(mySlogLogger))
 
-// Fan out to multiple destinations: stderr + remote collector
-multi := windlog.MultiLogger{
-    Loggers: []windlog.Logger{
-        windlog.NewSlogLogger(),
-        myRemoteLogger,
-    },
-}
-windlog.SetLogger(multi)
+// App-level logger; falls back to the global logger if not set
+app.Logger().Info(ctx, "starting")
 
 // Guard expensive argument construction with Enabled
+logger := app.Logger()
 if logger.Enabled(windlog.LevelDebug) {
     logger.Debug(ctx, "detail", computeExpensiveData())
 }
-
-// Or adapt your own logging backend
-windlog.SetLogger(myZapAdapter{})
 ```
 
 ### Advanced Configuration
@@ -159,7 +150,8 @@ app := wind.New(
     wind.WithLogger(myLogger),              // app-level logger
     wind.WithBeforeStop(func(ctx context.Context) error {
         // Pre-shutdown hook: deregister service, drain request queue
-        return registrar.Deregister(ctx, inst)
+        // Use your chosen registry implementation (go-wind-plugins)
+        return nil
     }),
     wind.WithAfterStop(func(ctx context.Context) error {
         // Post-shutdown hook: close DB connections, flush buffers
@@ -175,6 +167,10 @@ endpoint := grpcServer.Endpoint()
 
 // Wait for the app to finish (useful for external supervision)
 <-app.Done()
+// Retrieve Run's final error (must be called after Done is closed)
+if err := app.Err(); err != nil {
+    log.Fatal(err)
+}
 ```
 
 ---
@@ -185,22 +181,19 @@ endpoint := grpcServer.Endpoint()
 graph LR
     APP["wind.App<br/>Lifecycle orchestration"]
     APP -->|"manages"| SERVER["transport.Server<br/>interface contract"]
-    APP -.->|"caller assembles"| REG["registry<br/>Registrar / Discovery"]
-    APP -.->|"caller assembles"| CFG["config<br/>Reader / Watcher"]
-    APP -.->|"caller assembles"| LOG["log<br/>Logger"]
+    APP -.->|"global fallback"| LOG["log.Logger<br/>interface (no built-in impl)"]
 ```
 
-> Dashed lines indicate modules the framework does NOT hard-wire — callers assemble them freely.
+> Core manages Server lifecycle only. Logging provides just the interface + global registry; config, registry, etc. are provided by [go-wind-plugins](https://github.com/tx7do/go-wind-plugins).
 
 ```text
 go-wind/
 ├── app.go              Core engine: App lifecycle management
+├── errors.go           Centralized error definitions
 ├── context.go          Request-scoped metadata propagation (TraceID / UserID / Metadata)
-├── instance.go         Service instance model & context binding
-├── transport/          Transport abstraction (Server / Transporter)
-├── registry/           Service registration & discovery abstraction (Registrar / Discovery)
-├── config/             Config source abstraction (Reader / ReadCloser / Watcher / ValueWatcher)
-└── log/                Log facade (Logger interface + LevelFilter + slog adapter + nop impl)
+├── instance.go         Service instance model
+├── transport/          Transport abstraction (Server)
+└── log/                Log facade (Logger interface + Level + nop impl + global registry)
 ```
 
 ### Module Overview
@@ -208,12 +201,10 @@ go-wind/
 | Module | Core Interfaces | Responsibility |
 |:---|:---|:---|
 | `wind` | `App`, `Option` | Application lifecycle orchestration, graceful shutdown |
-| `wind` | `Instance` | Service instance modeling, context propagation |
+| `wind` | `Instance` | Service instance modeling |
 | `wind` | `Metadata` | Request-scoped metadata (TraceID etc.) propagation |
-| `transport` | `Server`, `Transporter` | Transport-layer abstraction for any protocol |
-| `registry` | `Registrar`, `Discovery`, `Watcher` | Service registration, discovery & change watch |
-| `config` | `Reader`, `ReadCloser`, `Watcher`, `ValueWatcher` | Config loading & hot-reload watching |
-| `log` | `Logger`, `LevelFilter`, `MultiLogger` | Logging facade adaptable to any backend; level filter and multi-destination fan-out |
+| `transport` | `Server` | Transport-layer abstraction for any protocol |
+| `log` | `Logger`, `Level` | Log interface contract + global registry; adapters in plugins |
 
 ---
 
@@ -223,20 +214,31 @@ The core capability of go-wind is **reliable application lifecycle management**:
 
 ```mermaid
 graph TB
-    S1["srv.Start"] --> EG
-    S2["srv.Start"] --> EG
-    S3["srv.Start"] --> EG
-    EG["errgroup (egCtx)"]
+    subgraph Phase 1: Start
+        S1["srv.Start"] --> EG
+        S2["srv.Start"] --> EG
+        S3["srv.Start"] --> EG
+    end
 
     SIG["Signal received<br/>SIGTERM / SIGINT / SIGQUIT"] --> TC
     CTX["ctx cancelled"] --> TC
     CRASH["Server crash / exit"] --> TC
 
-    TC["triggerCancel()"] -->|"cancels"| EG
+    TC["triggerCancel()"] -->|"cancels"| EG["errgroup<br/>egCtx"]
 
-    EG --> Stop1["srv.Stop<br/>independent timeout ctx"]
-    EG --> Stop2["srv.Stop<br/>independent timeout ctx"]
-    EG --> Stop3["srv.Stop<br/>independent timeout ctx"]
+    EG --> P2["Phase 2: BeforeStop Hook<br/>synchronous, before Stop"]
+    P2 --> P3
+
+    subgraph Phase 3: Server.Stop
+        P3["concurrent Stop"]
+        P3 --> Stop1["srv.Stop<br/>independent timeout ctx"]
+        P3 --> Stop2["srv.Stop<br/>independent timeout ctx"]
+        P3 --> Stop3["srv.Stop<br/>independent timeout ctx"]
+    end
+
+    Stop1 --> P4["Phase 4: AfterStop Hook<br/>synchronous, after Stop"]
+    Stop2 --> P4
+    Stop3 --> P4
 ```
 
 **Design Highlights:**
@@ -247,8 +249,9 @@ graph TB
 | Crash cascade | Any server crash or self-exit automatically triggers graceful shutdown of all other servers via errgroup |
 | No double-Stop | `App.Stop()` only triggers cancellation; it never calls `Server.Stop()` directly — shutdown logic is centralized |
 | Signal awareness | Listens for `SIGTERM` / `SIGINT` / `SIGQUIT` by default; fully customizable |
-| Lifecycle hooks | `WithBeforeStop` / `WithAfterStop` execute custom cleanup callbacks before/after shutdown — assembled by the caller |
+| Lifecycle hooks | `WithBeforeStop` / `WithAfterStop` execute in phased order: BeforeStop → Server.Stop → AfterStop, each phase with its own timeout context |
 | Server.Endpoint | Server implementations expose their actual listening address, supporting `:0` random port binding for registry registration |
+| App.Err | `App.Err()` returns Run's final error after `Done()` is closed, allowing external supervisors to observe the outcome |
 
 ---
 

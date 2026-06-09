@@ -384,3 +384,92 @@ func TestApp_Run_LifecycleHooks_Order(t *testing.T) {
 		t.Error("afterStop hook was not called")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Ordering guarantee: BeforeStop hooks must complete BEFORE any server's
+// Stop is called. The old design ran them concurrently inside the same
+// errgroup, creating a race (BUG). This test blocks the hook until the test
+// signals it to proceed, then asserts that Server.Stop has NOT been called
+// while the hook was still blocking.
+// ---------------------------------------------------------------------------
+
+func TestApp_Run_BeforeStopRunsBeforeStop(t *testing.T) {
+	srv := newMockServer("srv-1")
+
+	beforeProceed := make(chan struct{})
+
+	app := New(
+		WithServer(srv),
+		WithBeforeStop(func(ctx context.Context) error {
+			// Block until the test signals us to proceed.
+			<-beforeProceed
+			return nil
+		}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+
+	waitFor(t, "server start", srv.started)
+
+	cancel()
+
+	// Give shutdown time to reach the BeforeStop hook. The hook is now
+	// blocking, so Server.Stop should NOT have been called yet.
+	time.Sleep(50 * time.Millisecond)
+
+	select {
+	case <-srv.stopped:
+		t.Fatal("server Stop was called while beforeStop hook was still blocking (ordering BUG)")
+	default:
+		// Good: Stop hasn't been called yet because beforeStop is blocking.
+	}
+
+	// Release the hook; Run should now proceed to Phase 3 (Server.Stop).
+	close(beforeProceed)
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// App.Err must return the same error that Run returned, after Done is closed.
+// ---------------------------------------------------------------------------
+
+func TestApp_Err_ReturnsRunError(t *testing.T) {
+	crashErr := errors.New("crash")
+	crashSrv := newMockServer("crash").withStartErr(crashErr)
+
+	app := New(WithServer(crashSrv))
+
+	runErrCh := make(chan error, 1)
+	go func() { runErrCh <- app.Run(context.Background()) }()
+
+	runErr := <-runErrCh
+
+	// Wait for Done to close.
+	<-app.Done()
+
+	// Err should return the same error.
+	if got := app.Err(); !errors.Is(got, crashErr) {
+		t.Fatalf("Err() = %v, want %v", got, crashErr)
+	}
+	if !errors.Is(runErr, crashErr) {
+		t.Fatalf("Run returned %v, want %v", runErr, crashErr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// App.Err must return nil before Run has completed.
+// ---------------------------------------------------------------------------
+
+func TestApp_Err_NilBeforeRunCompletes(t *testing.T) {
+	app := New()
+	if err := app.Err(); err != nil {
+		t.Fatalf("Err() before Run should return nil, got %v", err)
+	}
+}

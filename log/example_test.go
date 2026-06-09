@@ -2,39 +2,62 @@ package log_test
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/tx7do/go-wind/log"
 )
-
-// ExampleNewSlogLogger demonstrates creating the default slog-backed logger.
-// The output goes to stderr at INFO level.
-func ExampleNewSlogLogger() {
-	logger := log.NewSlogLogger()
-	logger.Info(context.Background(), "server started", "port", 8080)
-}
 
 // ExampleSetLogger demonstrates setting the package-level global logger.
 // After this call, all code using [log.GetLogger] will receive the new
 // logger. Pass nil to revert to the silent nopLogger.
 func ExampleSetLogger() {
-	log.SetLogger(log.NewSlogLogger())
+	// Use a custom Logger implementation or one from go-wind-plugins.
+	// Here we demonstrate the global logger lifecycle.
+	log.SetLogger(nil) // revert to nopLogger
 	defer log.SetLogger(nil)
 
 	logger := log.GetLogger()
 	logger.Info(context.Background(), "hello from global logger")
+	// Output:
 }
 
-// ExampleLevelFilter demonstrates filtering log messages by severity.
-// Messages below the configured level are silently discarded without
-// reaching the underlying logger.
-func ExampleLevelFilter() {
-	// Wrap an slog logger with a WARN threshold.
-	filtered := log.LevelFilter{
-		Logger: log.NewSlogLogger(),
-		Level:  log.LevelWarn,
+// ExampleLogger demonstrates the Logger interface contract.
+// Callers implement this interface to bridge their own logging backend.
+func ExampleLogger() {
+	// A minimal custom logger implementation:
+	var l log.Logger = myLogger{}
+
+	// All methods take context as the first argument for trace propagation.
+	l.Debug(context.Background(), "debug message", "key", "value")
+	l.Info(context.Background(), "info message")
+	l.Warn(context.Background(), "warn message")
+	l.Error(context.Background(), "error message")
+
+	// Enabled lets callers guard expensive argument construction.
+	if l.Enabled(log.LevelDebug) {
+		l.Debug(context.Background(), "expensive", computeData())
 	}
 
-	filtered.Info(context.Background(), "this is discarded") // below WARN
-	filtered.Warn(context.Background(), "this is visible")   // at WARN
-	filtered.Error(context.Background(), "this is visible")  // above WARN
+	// With returns a new logger with attached key-value pairs.
+	child := l.With("module", "example")
+	child.Info(context.Background(), "child logger")
+	// Output:
+	// DEBUG
+	// INFO
+	// WARN
+	// ERROR
+	// DEBUG
+	// INFO
 }
+
+func computeData() any { return nil }
+
+// myLogger is a minimal Logger implementation for demonstration purposes.
+type myLogger struct{}
+
+func (myLogger) Debug(context.Context, string, ...any) { fmt.Println("DEBUG") }
+func (myLogger) Info(context.Context, string, ...any)  { fmt.Println("INFO") }
+func (myLogger) Warn(context.Context, string, ...any)  { fmt.Println("WARN") }
+func (myLogger) Error(context.Context, string, ...any) { fmt.Println("ERROR") }
+func (myLogger) Enabled(log.Level) bool                { return true }
+func (l myLogger) With(args ...any) log.Logger         { return l }

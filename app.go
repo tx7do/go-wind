@@ -1,11 +1,11 @@
 // Package wind provides a minimalist microservice framework following a
 // composable (Lego-like) design philosophy. The core [App] manages server
-// lifecycles, while registration, configuration, logging and instance
-// assembly are left entirely to the caller.
+// lifecycles, while registration, logging and instance assembly are left
+// entirely to the caller.
 //
 // This is NOT a battery-included framework. Each subsystem (transport,
-// registry, config, log) exposes only interfaces and helper types so that
-// callers mix and match implementations as needed.
+// log) exposes only interfaces and helper types so that callers mix and
+// match implementations as needed.
 package wind
 
 import (
@@ -27,11 +27,6 @@ import (
 // Option configures an [*App] via functional options.
 type Option func(*App)
 
-// ErrAppAlreadyRunning is returned by [App.Run] when Run has already been
-// called on the same [*App] instance. An [*App] is designed to be used once;
-// create a new instance for each run.
-var ErrAppAlreadyRunning = errors.New("wind: App.Run already called")
-
 // App is the central runtime that owns and manages the lifecycle of one or
 // more [transport.Server] instances. It is intentionally free of any
 // hard-coded integration — callers wire up servers, registries, loggers, etc.
@@ -47,6 +42,7 @@ type App struct {
 	running   atomic.Bool
 	done      chan struct{}
 	closeOnce sync.Once
+	runErr    error
 }
 
 // options holds the fully-resolved configuration for an [App]. All fields are
@@ -198,6 +194,24 @@ func (a *App) Done() <-chan struct{} {
 	return a.done
 }
 
+// Err returns the error that caused [Run] to exit. It must be called after
+// [Done] is closed; calling it before returns nil.
+//
+// This complements [Done] by allowing external supervisors to observe both
+// the termination and the outcome without wrapping [Run] in their own
+// goroutine:
+//
+//	<-app.Done()
+//	if err := app.Err(); err != nil { ... }
+func (a *App) Err() error {
+	select {
+	case <-a.done:
+	default:
+		return nil
+	}
+	return a.runErr
+}
+
 // Run starts the application and blocks until all servers have stopped.
 //
 // All registered servers are started concurrently inside an errgroup. The
@@ -231,50 +245,12 @@ func (a *App) Run(ctx context.Context) error {
 
 	eg, egCtx := errgroup.WithContext(runCtx)
 
-	// firstStopErr captures the first non-nil error from any server's Stop
-	// call. errgroup only retains the first non-nil error across ALL
-	// goroutines; when Start returns context.Canceled (which is filtered
-	// below) before a Stop watcher finishes, Stop errors would be silently
-	// lost. We capture them separately and surface them after eg.Wait()
-	// (FINDING-4).
-	var firstStopErr error
-	var stopErrOnce sync.Once
-
-	// BeforeStop hooks: invoked before any server is stopped. They receive
-	// a fresh context with the stopTimeout deadline so they have a bounded
-	// window to complete.
-	if len(a.opts.beforeStop) > 0 {
-		beforeCtx, beforeCancel := context.WithTimeout(context.Background(), a.opts.stopTimeout)
-		for _, fn := range a.opts.beforeStop {
-			fn := fn
-			eg.Go(func() error {
-				<-egCtx.Done()
-				if err := fn(beforeCtx); err != nil {
-					a.Logger().Warn(beforeCtx, "beforeStop hook error", "error", err)
-				}
-				return nil
-			})
-		}
-		defer beforeCancel()
-	}
-
+	// Start all servers concurrently in an errgroup. Only Start goroutines
+	// and the signal watcher are in this group. Stop watchers and lifecycle
+	// hooks are handled in separate phases below to guarantee correct
+	// ordering: BeforeStop → Server.Stop → AfterStop.
 	for _, srv := range a.opts.servers {
 		srv := srv
-		// Stop watcher: when egCtx is cancelled (signal received or a server
-		// crashed / self-exited), stop the server with a fresh timeout context
-		// derived from context.Background(). We must NOT derive from runCtx /
-		// egCtx, because cancel() would immediately invalidate it, rendering
-		// stopTimeout useless (BUG-1 regression guard).
-		eg.Go(func() error {
-			<-egCtx.Done()
-			stopCtx, cancel := context.WithTimeout(context.Background(), a.opts.stopTimeout)
-			defer cancel()
-			err := srv.Stop(stopCtx)
-			if err != nil {
-				stopErrOnce.Do(func() { firstStopErr = err })
-			}
-			return err
-		})
 		// Start the server. If Start returns an error, errgroup cancels egCtx
 		// (BUG-3). If Start returns nil (server self-exited), we explicitly
 		// trigger a full shutdown so other servers also stop (ISSUE-3).
@@ -299,37 +275,75 @@ func (a *App) Run(ctx context.Context) error {
 			// Triggered by a server crash or external cancellation; nothing to do.
 		case <-c:
 			// Signal received: cancel the main context, which cascades to egCtx
-			// and triggers all servers' Stop watchers.
+			// and triggers all Start goroutines to return.
 			a.triggerCancel()
 		}
 		return nil
 	})
 
-	err := eg.Wait()
+	// Phase 1 complete: wait for all Start goroutines and the signal watcher
+	// to return (i.e. shutdown has been triggered).
+	startErr := eg.Wait()
 
-	// AfterStop hooks: invoked after all servers have stopped.
-	if len(a.opts.afterStop) > 0 {
-		afterCtx, afterCancel := context.WithTimeout(context.Background(), a.opts.stopTimeout)
-		for _, fn := range a.opts.afterStop {
-			if err := fn(afterCtx); err != nil {
-				a.Logger().Warn(afterCtx, "afterStop hook error", "error", err)
-			}
+	// Phase 2: BeforeStop hooks — synchronous, BEFORE any server is stopped.
+	// Each hook gets a FRESH timeout context created at this point, not at
+	// Run start (BUG fix: previously the context timed out during normal
+	// operation and hooks always saw an expired deadline).
+	for _, fn := range a.opts.beforeStop {
+		hookCtx, hookCancel := context.WithTimeout(context.Background(), a.opts.stopTimeout)
+		if err := fn(hookCtx); err != nil {
+			a.Logger().Warn(hookCtx, "beforeStop hook error", "error", err)
 		}
-		afterCancel()
+		hookCancel()
 	}
 
-	// Signal that shutdown is complete so [Stop] can return.
+	// Phase 3: Server.Stop — concurrent, each with its own timeout context
+	// derived from context.Background(). We must NOT derive from runCtx /
+	// egCtx, because cancel() would immediately invalidate it, rendering
+	// stopTimeout useless (BUG-1 regression guard).
+	//
+	// firstStopErr captures the first non-nil error from any server's Stop
+	// call (FINDING-4). Since Stop is now outside the errgroup, we capture
+	// errors directly rather than relying on errgroup's first-error-wins.
+	var firstStopErr error
+	var stopErrOnce sync.Once
+	var stopWg sync.WaitGroup
+	for _, srv := range a.opts.servers {
+		srv := srv
+		stopWg.Add(1)
+		go func() {
+			defer stopWg.Done()
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), a.opts.stopTimeout)
+			defer stopCancel()
+			if err := srv.Stop(stopCtx); err != nil {
+				stopErrOnce.Do(func() { firstStopErr = err })
+			}
+		}()
+	}
+	stopWg.Wait()
+
+	// Phase 4: AfterStop hooks — synchronous, AFTER all servers have stopped.
+	for _, fn := range a.opts.afterStop {
+		hookCtx, hookCancel := context.WithTimeout(context.Background(), a.opts.stopTimeout)
+		if err := fn(hookCtx); err != nil {
+			a.Logger().Warn(hookCtx, "afterStop hook error", "error", err)
+		}
+		hookCancel()
+	}
+
+	// Determine the final error to return and store for [Err].
+	var runErr error
+	if startErr != nil && !errors.Is(startErr, context.Canceled) {
+		runErr = startErr
+	} else if firstStopErr != nil {
+		runErr = firstStopErr
+	}
+
+	// Store the error before signaling completion so [Err] can read it
+	// safely after [Done] is closed (happens-before via channel close).
+	a.runErr = runErr
 	a.closeOnce.Do(func() { close(a.done) })
-
-	if err != nil && !errors.Is(err, context.Canceled) {
-		return err
-	}
-	// The errgroup error was nil or context.Canceled; surface any Stop error
-	// that would otherwise be swallowed (FINDING-4).
-	if firstStopErr != nil {
-		return firstStopErr
-	}
-	return nil
+	return runErr
 }
 
 // Stop gracefully stops the application by cancelling the main context and
