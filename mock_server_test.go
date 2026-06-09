@@ -10,7 +10,8 @@ import (
 // allows tests to synchronize on Start/Stop without sleeping, as well as
 // inspect the context handed to Stop (BUG-1 / BUG-3 regression coverage).
 type mockServer struct {
-	name string
+	name     string
+	endpoint string
 
 	// startErr, if non-nil, is returned immediately by Start without blocking,
 	// simulating a server crash (BUG-3 scenario).
@@ -41,9 +42,10 @@ type mockServer struct {
 
 func newMockServer(name string) *mockServer {
 	return &mockServer{
-		name:    name,
-		started: make(chan struct{}),
-		stopped: make(chan struct{}),
+		name:     name,
+		endpoint: "mock://" + name,
+		started:  make(chan struct{}),
+		stopped:  make(chan struct{}),
 	}
 }
 
@@ -58,6 +60,12 @@ func (m *mockServer) withStartErr(err error) *mockServer {
 // that exits on its own without error.
 func (m *mockServer) withSelfExit() *mockServer {
 	m.selfExit = true
+	return m
+}
+
+// withEndpoint overrides the default mock endpoint string.
+func (m *mockServer) withEndpoint(ep string) *mockServer {
+	m.endpoint = ep
 	return m
 }
 
@@ -92,6 +100,11 @@ func (m *mockServer) Stop(ctx context.Context) error {
 	m.stopCtxMu.Unlock()
 	close(m.stopped)
 	return m.stopErr
+}
+
+// Endpoint implements transport.Server, returning the mock endpoint.
+func (m *mockServer) Endpoint() string {
+	return m.endpoint
 }
 
 // stopContextErr returns ctx.Err() as it was at the exact moment Stop was

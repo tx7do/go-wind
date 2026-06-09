@@ -13,6 +13,16 @@ type Instance struct {
 	Metadata  map[string]string `json:"metadata"`
 }
 
+// FirstEndpoint returns the first endpoint URL or an empty string if the
+// instance has no endpoints. This is a convenience for the common
+// single-endpoint case.
+func (i *Instance) FirstEndpoint() string {
+	if len(i.Endpoints) > 0 {
+		return i.Endpoints[0]
+	}
+	return ""
+}
+
 // instanceKey is an unexported context key type used to store and retrieve
 // an [*Instance] without collisions with other context values.
 type instanceKey struct{}

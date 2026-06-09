@@ -131,6 +131,20 @@ filtered := windlog.LevelFilter{
 }
 windlog.SetLogger(filtered)
 
+// Fan out to multiple destinations: stderr + remote collector
+multi := windlog.MultiLogger{
+    Loggers: []windlog.Logger{
+        windlog.NewSlogLogger(),
+        myRemoteLogger,
+    },
+}
+windlog.SetLogger(multi)
+
+// Guard expensive argument construction with Enabled
+if logger.Enabled(windlog.LevelDebug) {
+    logger.Debug(ctx, "detail", computeExpensiveData())
+}
+
 // Or adapt your own logging backend
 windlog.SetLogger(myZapAdapter{})
 ```
@@ -143,10 +157,21 @@ app := wind.New(
     wind.WithStopTimeout(30*time.Second),  // custom graceful shutdown timeout
     wind.WithSignal(syscall.SIGTERM),       // custom signal set
     wind.WithLogger(myLogger),              // app-level logger
+    wind.WithBeforeStop(func(ctx context.Context) error {
+        // Pre-shutdown hook: deregister service, drain request queue
+        return registrar.Deregister(ctx, inst)
+    }),
+    wind.WithAfterStop(func(ctx context.Context) error {
+        // Post-shutdown hook: close DB connections, flush buffers
+        return db.Close()
+    }),
 )
 
 // App-level logger; falls back to the global logger if not set
 app.Logger().Info(ctx, "starting")
+
+// Server.Endpoint() returns the actual listening address (supports :0 random port)
+endpoint := grpcServer.Endpoint()
 
 // Wait for the app to finish (useful for external supervision)
 <-app.Done()
@@ -188,7 +213,7 @@ go-wind/
 | `transport` | `Server`, `Transporter` | Transport-layer abstraction for any protocol |
 | `registry` | `Registrar`, `Discovery`, `Watcher` | Service registration, discovery & change watch |
 | `config` | `Reader`, `ReadCloser`, `Watcher`, `ValueWatcher` | Config loading & hot-reload watching |
-| `log` | `Logger`, `LevelFilter` | Logging facade adaptable to any backend; level-filter wrapper |
+| `log` | `Logger`, `LevelFilter`, `MultiLogger` | Logging facade adaptable to any backend; level filter and multi-destination fan-out |
 
 ---
 
@@ -222,6 +247,8 @@ graph TB
 | Crash cascade | Any server crash or self-exit automatically triggers graceful shutdown of all other servers via errgroup |
 | No double-Stop | `App.Stop()` only triggers cancellation; it never calls `Server.Stop()` directly — shutdown logic is centralized |
 | Signal awareness | Listens for `SIGTERM` / `SIGINT` / `SIGQUIT` by default; fully customizable |
+| Lifecycle hooks | `WithBeforeStop` / `WithAfterStop` execute custom cleanup callbacks before/after shutdown — assembled by the caller |
+| Server.Endpoint | Server implementations expose their actual listening address, supporting `:0` random port binding for registry registration |
 
 ---
 
@@ -229,7 +256,7 @@ graph TB
 
 ### 1. Minimal Interfaces
 
-Each interface defines only the essential methods. For example, `Logger` has just 4 log methods + `With`; adapting any backend requires only a few lines of glue code.
+Each interface defines only the essential methods. For example, `Logger` has 4 log methods + `Enabled` + `With`; adapting any backend requires only a few lines of glue code. The `Enabled` method lets callers check the level before constructing expensive arguments.
 
 ### 2. Zero Implicit Dependencies
 
@@ -249,7 +276,7 @@ Global state (logger) and metadata propagation are concurrency-safe. `WithTraceI
 
 | Item | Requirement |
 |:---|:---|
-| Go version | 1.21+ |
+| Go version | 1.23+ |
 | Dependencies | Only `golang.org/x/sync` |
 
 ---

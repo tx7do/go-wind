@@ -62,6 +62,9 @@ type options struct {
 	sigs        []os.Signal
 	stopTimeout time.Duration
 
+	beforeStop []func(ctx context.Context) error
+	afterStop  []func(ctx context.Context) error
+
 	servers []transport.Server
 }
 
@@ -87,6 +90,28 @@ func WithVersion(version string) Option {
 // affecting the global state.
 func WithLogger(l log.Logger) Option {
 	return func(o *App) { o.opts.logger = l }
+}
+
+// WithBeforeStop registers a callback invoked BEFORE any server's Stop is
+// called during graceful shutdown. Typical uses include deregistering from
+// a service registry, draining an incoming-request queue, or writing a
+// final health-check ping.
+//
+// Multiple callbacks are executed in registration order. If any callback
+// returns an error, the error is logged but shutdown continues.
+func WithBeforeStop(fn func(ctx context.Context) error) Option {
+	return func(o *App) { o.opts.beforeStop = append(o.opts.beforeStop, fn) }
+}
+
+// WithAfterStop registers a callback invoked AFTER all servers have stopped.
+// Typical uses include closing database connections, flushing log buffers,
+// or releasing other resources.
+//
+// Multiple callbacks are executed in registration order. If any callback
+// returns an error, the error is logged but the error is not returned from
+// Run (the servers have already stopped successfully).
+func WithAfterStop(fn func(ctx context.Context) error) Option {
+	return func(o *App) { o.opts.afterStop = append(o.opts.afterStop, fn) }
 }
 
 // WithServer attaches one or more [transport.Server] instances to the [App].
@@ -215,6 +240,24 @@ func (a *App) Run(ctx context.Context) error {
 	var firstStopErr error
 	var stopErrOnce sync.Once
 
+	// BeforeStop hooks: invoked before any server is stopped. They receive
+	// a fresh context with the stopTimeout deadline so they have a bounded
+	// window to complete.
+	if len(a.opts.beforeStop) > 0 {
+		beforeCtx, beforeCancel := context.WithTimeout(context.Background(), a.opts.stopTimeout)
+		for _, fn := range a.opts.beforeStop {
+			fn := fn
+			eg.Go(func() error {
+				<-egCtx.Done()
+				if err := fn(beforeCtx); err != nil {
+					a.Logger().Warn(beforeCtx, "beforeStop hook error", "error", err)
+				}
+				return nil
+			})
+		}
+		defer beforeCancel()
+	}
+
 	for _, srv := range a.opts.servers {
 		srv := srv
 		// Stop watcher: when egCtx is cancelled (signal received or a server
@@ -263,6 +306,17 @@ func (a *App) Run(ctx context.Context) error {
 	})
 
 	err := eg.Wait()
+
+	// AfterStop hooks: invoked after all servers have stopped.
+	if len(a.opts.afterStop) > 0 {
+		afterCtx, afterCancel := context.WithTimeout(context.Background(), a.opts.stopTimeout)
+		for _, fn := range a.opts.afterStop {
+			if err := fn(afterCtx); err != nil {
+				a.Logger().Warn(afterCtx, "afterStop hook error", "error", err)
+			}
+		}
+		afterCancel()
+	}
 
 	// Signal that shutdown is complete so [Stop] can return.
 	a.closeOnce.Do(func() { close(a.done) })

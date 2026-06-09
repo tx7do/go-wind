@@ -131,6 +131,20 @@ filtered := windlog.LevelFilter{
 }
 windlog.SetLogger(filtered)
 
+// 複数宛先ファンアウト：stderr とリモートコレクターに同時出力
+multi := windlog.MultiLogger{
+    Loggers: []windlog.Logger{
+        windlog.NewSlogLogger(),
+        myRemoteLogger,
+    },
+}
+windlog.SetLogger(multi)
+
+// 高コストな引数構築を Enabled でガード
+if logger.Enabled(windlog.LevelDebug) {
+    logger.Debug(ctx, "detail", computeExpensiveData())
+}
+
 // または独自のログバックエンドを適応
 windlog.SetLogger(myZapAdapter{})
 ```
@@ -143,10 +157,21 @@ app := wind.New(
     wind.WithStopTimeout(30*time.Second),  // グレースフルシャットダウンのタイムアウト
     wind.WithSignal(syscall.SIGTERM),       // カスタムシグナル
     wind.WithLogger(myLogger),              // App レベルのロガー
+    wind.WithBeforeStop(func(ctx context.Context) error {
+        // シャットダウン前フック：サービス登録解除、リクエストキューのドレイン
+        return registrar.Deregister(ctx, inst)
+    }),
+    wind.WithAfterStop(func(ctx context.Context) error {
+        // シャットダウン後フック：DB接続のクローズ、バッファのフラッシュ
+        return db.Close()
+    }),
 )
 
 // App レベルロガー、未設定時はグローバルロガーにフォールバック
 app.Logger().Info(ctx, "starting")
+
+// Server.Endpoint() は実際のリスニングアドレスを返す（ランダムポート :0 に対応）
+endpoint := grpcServer.Endpoint()
 
 // App の終了を待機（外部監視に利用可能）
 <-app.Done()
@@ -188,7 +213,7 @@ go-wind/
 | `transport` | `Server`, `Transporter` | トランスポート層の抽象化、任意プロトコル対応 |
 | `registry` | `Registrar`, `Discovery`, `Watcher` | サービス登録、発見、変更監視 |
 | `config` | `Reader`, `ReadCloser`, `Watcher`, `ValueWatcher` | 設定読み込み & ホットリロード監視 |
-| `log` | `Logger`, `LevelFilter` | ログファサード、任意バックエンドに適応可能；レベルフィルターラッパー |
+| `log` | `Logger`, `LevelFilter`, `MultiLogger` | ログファサード、任意バックエンドに適応可能；レベルフィルターと複数宛先ファンアウト |
 
 ---
 
@@ -222,6 +247,8 @@ graph TB
 | クラッシュカスケード | サーバーのクラッシュまたは自己終了が errgroup 経由で他の全サーバーのグレースフルシャットダウンを自動トリガー |
 | ダブルストップ防止 | `App.Stop()` はキャンセルのみをトリガーし、`Server.Stop()` を直接呼び出しません — シャットダウンロジックは一元化 |
 | シグナル検知 | デフォルトで `SIGTERM` / `SIGINT` / `SIGQUIT` を監視、完全にカスタマイズ可能 |
+| ライフサイクルフック | `WithBeforeStop` / `WithAfterStop` がシャットダウン前/後にカスタムクリーンアップコールバックを実行 — 利用者が組み立て |
+| Server.Endpoint | Server 実装が実際のリスニングアドレスを公開、`:0` ランダムポートバインディング後のレジストリ登録をサポート |
 
 ---
 
@@ -229,7 +256,7 @@ graph TB
 
 ### 1. ミニマルインターフェース
 
-各インターフェースは必要最小限のメソッドのみを定義します。例えば `Logger` は4つのログメソッド + `With` のみで、任意のバックエンドへの適応は数行のグルーコードで済みます。
+各インターフェースは必要最小限のメソッドのみを定義します。例えば `Logger` は4つのログメソッド + `Enabled` + `With` のみで、任意のバックエンドへの適応は数行のグルーコードで済みます。`Enabled` メソッドにより、高コストな引数構築前にレベルをチェックできます。
 
 ### 2. 暗黙的依存ゼロ
 
@@ -249,7 +276,7 @@ graph TB
 
 | 項目 | 要件 |
 |:---|:---|
-| Go バージョン | 1.21+ |
+| Go バージョン | 1.23+ |
 | 依存関係 | `golang.org/x/sync` のみ |
 
 ---

@@ -131,6 +131,20 @@ filtered := windlog.LevelFilter{
 }
 windlog.SetLogger(filtered)
 
+// 多目的地扇出：同时输出到 stderr 和远程收集器
+multi := windlog.MultiLogger{
+    Loggers: []windlog.Logger{
+        windlog.NewSlogLogger(),
+        myRemoteLogger,
+    },
+}
+windlog.SetLogger(multi)
+
+// 昂贵参数构造可用 Enabled 守卫
+if logger.Enabled(windlog.LevelDebug) {
+    logger.Debug(ctx, "detail", computeExpensiveData())
+}
+
 // 或者适配你自己的日志后端
 windlog.SetLogger(myZapAdapter{})
 ```
@@ -143,10 +157,21 @@ app := wind.New(
     wind.WithStopTimeout(30*time.Second),  // 自定义优雅停机超时
     wind.WithSignal(syscall.SIGTERM),       // 自定义信号
     wind.WithLogger(myLogger),              // App 级别独立日志器
+    wind.WithBeforeStop(func(ctx context.Context) error {
+        // 停机前回调：注销服务、排空请求队列
+        return registrar.Deregister(ctx, inst)
+    }),
+    wind.WithAfterStop(func(ctx context.Context) error {
+        // 停机后回调：关闭数据库连接、刷入缓冲
+        return db.Close()
+    }),
 )
 
 // App 级别日志器，未设置时回退到全局 logger
 app.Logger().Info(ctx, "starting")
+
+// Server.Endpoint() 返回实际监听地址（支持随机端口 :0）
+endpoint := grpcServer.Endpoint()
 
 // 等待 App 结束（可用于外部编排）
 <-app.Done()
@@ -188,7 +213,7 @@ go-wind/
 | `transport` | `Server`, `Transporter` | 传输层抽象，支持任意协议接入 |
 | `registry` | `Registrar`, `Discovery`, `Watcher` | 服务注册、发现与变更监听 |
 | `config` | `Reader`, `ReadCloser`, `Watcher`, `ValueWatcher` | 配置读取、热更新监听 |
-| `log` | `Logger`, `LevelFilter` | 日志门面，适配任意后端；级别过滤包装器 |
+| `log` | `Logger`, `LevelFilter`, `MultiLogger` | 日志门面，适配任意后端；级别过滤与多目的地扇出 |
 
 ---
 
@@ -222,6 +247,8 @@ graph TB
 | 崩溃级联 | 任一 Server 崩溃或自行退出，errgroup 自动触发其余 Server 优雅停止 |
 | 无双重 Stop | `App.Stop()` 只触发取消信号，不直接调用 `Server.Stop()`，停机逻辑统一收口 |
 | 信号感知 | 默认监听 `SIGTERM` / `SIGINT` / `SIGQUIT`，可自定义 |
+| 生命周期 Hook | `WithBeforeStop` / `WithAfterStop` 在停机前/后执行自定义清理回调，由使用者自行组装 |
+| Server.Endpoint | Server 实现暴露实际监听地址，支持 `:0` 随机端口绑定后获取真实地址用于注册 |
 
 ---
 
@@ -229,7 +256,7 @@ graph TB
 
 ### 1. 接口最小化
 
-每个接口只定义必要方法。例如 `Logger` 只有 4 个日志方法 + 1 个 `With`，适配任意后端只需几行胶水代码。
+每个接口只定义必要方法。例如 `Logger` 有 4 个日志方法 + `Enabled` + `With`，适配任意后端只需几行胶水代码。`Enabled` 方法让使用者在昂贵参数构造前检查级别。
 
 ### 2. 零隐式依赖
 
@@ -249,7 +276,7 @@ graph TB
 
 | 项 | 要求 |
 |:---|:---|
-| Go 版本 | 1.21+ |
+| Go 版本 | 1.23+ |
 | 外部依赖 | 仅 `golang.org/x/sync` |
 
 ---

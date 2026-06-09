@@ -18,4 +18,12 @@ type Server interface {
 	// Stop performs a graceful shutdown. The provided ctx carries a deadline
 	// that implementations should respect.
 	Stop(ctx context.Context) error
+	// Endpoint returns the actual network address the server is listening
+	// on. For servers that bind to ":0" (OS-assigned port), this MUST
+	// return the resolved address after [Start] begins accepting
+	// connections, so callers can register it with a service registry.
+	//
+	// Implementations that have not yet started, or that listen on a
+	// fixed address, may return the configured address immediately.
+	Endpoint() string
 }

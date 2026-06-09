@@ -38,6 +38,12 @@ func (s SlogLogger) Error(ctx context.Context, msg string, args ...any) {
 	s.L.ErrorContext(ensureCtx(ctx), msg, args...)
 }
 
+// Enabled maps the wind [Level] to the equivalent slog level and reports
+// whether the underlying [*slog.Logger] would emit a record at that level.
+func (s SlogLogger) Enabled(level Level) bool {
+	return s.L.Enabled(nil, levelToSlog(level))
+}
+
 // With returns a new SlogLogger whose underlying *slog.Logger has the given
 // key-value pairs attached. This is typically used to distinguish modules,
 // e.g., logger.With("module", "registry"). The returned logger will include
@@ -53,6 +59,22 @@ func ensureCtx(ctx context.Context) context.Context {
 		return context.Background()
 	}
 	return ctx
+}
+
+// levelToSlog maps a wind [Level] to the equivalent [slog.Level].
+func levelToSlog(level Level) slog.Level {
+	switch level {
+	case LevelDebug:
+		return slog.LevelDebug
+	case LevelInfo:
+		return slog.LevelInfo
+	case LevelWarn:
+		return slog.LevelWarn
+	case LevelError:
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 // Compile-time assertion: SlogLogger implements Logger.

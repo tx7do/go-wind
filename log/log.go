@@ -29,6 +29,14 @@ type Logger interface {
 	// Error logs a message at ERROR level.
 	Error(ctx context.Context, msg string, args ...any)
 
+	// Enabled reports whether the logger emits records at the given [Level].
+	// Expensive argument construction can be guarded by this check:
+	//
+	//		if logger.Enabled(log.LevelDebug) {
+	//		    logger.Debug(ctx, "detail", computeExpensiveData())
+	//		}
+	Enabled(level Level) bool
+
 	// With returns a new Logger instance with the given key-value pairs
 	// attached. This is typically used to distinguish modules, e.g.,
 	// logger.With("module", "registry").

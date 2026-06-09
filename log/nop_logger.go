@@ -11,6 +11,9 @@ func (nopLogger) Info(context.Context, string, ...any)  {}
 func (nopLogger) Warn(context.Context, string, ...any)  {}
 func (nopLogger) Error(context.Context, string, ...any) {}
 
+// Enabled always returns false because nopLogger discards all output.
+func (nopLogger) Enabled(Level) bool { return false }
+
 // With returns a new nopLogger. Since nopLogger discards all output, the
 // attached key-value pairs have no effect but the method exists to satisfy
 // the Logger interface.

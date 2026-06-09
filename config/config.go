@@ -1,11 +1,14 @@
 // Package config defines the configuration-source abstractions for the
 // go-wind framework.
 //
-// It provides three interfaces that concrete providers (file, env, etcd,
+// It provides composable interfaces that concrete providers (file, env, etcd,
 // consul, etc.) implement:
-//   - [Reader]   — one-shot key lookups.
-//   - [Watcher]  — reactive change notifications.
-//   - [ReadWatcher] — combines Reader and Watcher.
+//   - [Reader]       — one-shot key lookups.
+//   - [Closer]       — resource lifecycle for file/connection-backed providers.
+//   - [ReadCloser]   — combines Reader and Closer.
+//   - [Watcher]      — signal-mode change notifications.
+//   - [ReadWatcher]  — combines Reader and Watcher.
+//   - [ValueWatcher] — push-mode change notifications with value delivery.
 package config
 
 import "context"

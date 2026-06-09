@@ -60,6 +60,12 @@ func (f LevelFilter) Error(ctx context.Context, msg string, args ...any) {
 	}
 }
 
+// Enabled reports whether the underlying logger would emit at the given level
+// AND that level is at or above the filter threshold.
+func (f LevelFilter) Enabled(level Level) bool {
+	return level >= f.Level && f.Logger.Enabled(level)
+}
+
 // With returns a new LevelFilter wrapping the underlying logger's With
 // result, preserving the current Level threshold.
 func (f LevelFilter) With(args ...any) Logger {

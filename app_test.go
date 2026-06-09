@@ -3,6 +3,7 @@ package wind
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -332,5 +333,54 @@ func TestApp_Run_StopError_Propagates(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not return after cancel")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle hooks: WithBeforeStop and WithAfterStop must be called in the
+// correct order relative to server Start/Stop.
+// ---------------------------------------------------------------------------
+
+func TestApp_Run_LifecycleHooks_Order(t *testing.T) {
+	srv := newMockServer("srv-1")
+
+	var beforeCalled atomic.Int32
+	var afterCalled atomic.Int32
+
+	app := New(
+		WithServer(srv),
+		WithBeforeStop(func(ctx context.Context) error {
+			beforeCalled.Store(1)
+			return nil
+		}),
+		WithAfterStop(func(ctx context.Context) error {
+			// AfterStop should run after server Stop
+			if !srv.stopCalled.Load() {
+				t.Error("afterStop ran before server was stopped")
+			}
+			afterCalled.Store(1)
+			return nil
+		}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+
+	waitFor(t, "server start", srv.started)
+
+	cancel()
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+
+	if beforeCalled.Load() != 1 {
+		t.Error("beforeStop hook was not called")
+	}
+	if afterCalled.Load() != 1 {
+		t.Error("afterStop hook was not called")
 	}
 }
