@@ -11,7 +11,7 @@ import "context"
 
 // Logger is the minimal logging interface used throughout the framework.
 //
-// It is deliberately small (4 log methods + With) so that any project can
+// It is deliberately small (4 log methods + Enabled + With) so that any project can
 // adapt its own backend (the stdlib *slog.Logger, zap, zerolog, kratos log,
 // …) with a few lines of glue code and inject it via [SetLogger].
 //
