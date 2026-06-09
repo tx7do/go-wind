@@ -11,11 +11,24 @@ package config
 import "context"
 
 // Reader provides one-shot loading of configuration data by key.
+// It intentionally excludes lifecycle methods — providers that hold
+// resources (files, connections) should implement [ReadCloser] instead.
 type Reader interface {
 	// Load retrieves the raw configuration bytes for the given key.
 	Load(ctx context.Context, key string) (data []byte, err error)
-	// Close releases any resources held by the reader.
+}
+
+// Closer releases any resources held by a config provider. It mirrors
+// [io.Closer] and is used as a building block for [ReadCloser].
+type Closer interface {
 	Close() error
+}
+
+// ReadCloser combines [Reader] and [Closer] for providers that hold resources
+// (files, network connections, etc.) which must be explicitly released.
+type ReadCloser interface {
+	Reader
+	Closer
 }
 
 // Watcher provides reactive configuration change notifications.

@@ -39,13 +39,13 @@ func GetMetadata(ctx context.Context, key string) string {
 	return ""
 }
 
-// WithTraceID returns a new context with the given trace ID set in its
-// [Metadata].
+// WithMetadata returns a new context with the given key/value pair set in
+// its [Metadata].
 //
 // The existing metadata map is deep-copied before modification to prevent
 // concurrent write races when the parent context is shared across goroutines
 // (BUG-2 regression guard).
-func WithTraceID(ctx context.Context, traceID string) context.Context {
+func WithMetadata(ctx context.Context, key, value string) context.Context {
 	md, ok := FromContext(ctx)
 	if !ok {
 		md = make(Metadata)
@@ -54,14 +54,44 @@ func WithTraceID(ctx context.Context, traceID string) context.Context {
 		// shared by other goroutines (concurrent write data race — BUG-2).
 		md = cloneMetadata(md)
 	}
-	md[HeaderTraceID] = traceID
+	md[key] = value
 	return NewContext(ctx, md)
+}
+
+// WithTraceID returns a new context with the given trace ID set in its
+// [Metadata]. It is a convenience wrapper around [WithMetadata].
+func WithTraceID(ctx context.Context, traceID string) context.Context {
+	return WithMetadata(ctx, HeaderTraceID, traceID)
 }
 
 // GetTraceID returns the trace ID from the context's [Metadata], or an empty
 // string if none is set.
 func GetTraceID(ctx context.Context) string {
 	return GetMetadata(ctx, HeaderTraceID)
+}
+
+// WithUserID returns a new context with the given user ID set in its
+// [Metadata]. It is a convenience wrapper around [WithMetadata].
+func WithUserID(ctx context.Context, userID string) context.Context {
+	return WithMetadata(ctx, HeaderUserID, userID)
+}
+
+// GetUserID returns the user ID from the context's [Metadata], or an empty
+// string if none is set.
+func GetUserID(ctx context.Context) string {
+	return GetMetadata(ctx, HeaderUserID)
+}
+
+// WithColorTag returns a new context with the given color tag set in its
+// [Metadata]. It is a convenience wrapper around [WithMetadata].
+func WithColorTag(ctx context.Context, tag string) context.Context {
+	return WithMetadata(ctx, HeaderColorTag, tag)
+}
+
+// GetColorTag returns the color tag from the context's [Metadata], or an
+// empty string if none is set.
+func GetColorTag(ctx context.Context) string {
+	return GetMetadata(ctx, HeaderColorTag)
 }
 
 // cloneMetadata returns a deep copy of md. The returned map is always

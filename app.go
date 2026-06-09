@@ -85,6 +85,19 @@ func WithServer(srv ...transport.Server) Option {
 	return func(o *App) { o.opts.servers = append(o.opts.servers, srv...) }
 }
 
+// WithStopTimeout sets the maximum duration allowed for graceful shutdown.
+// Each server's Stop call receives a context with this deadline. The default
+// is 10 seconds.
+func WithStopTimeout(d time.Duration) Option {
+	return func(o *App) { o.opts.stopTimeout = d }
+}
+
+// WithSignal overrides the default set of OS signals that trigger graceful
+// shutdown. By default the app listens for SIGTERM, SIGINT and SIGQUIT.
+func WithSignal(sigs ...os.Signal) Option {
+	return func(o *App) { o.opts.sigs = sigs }
+}
+
 // New creates an [*App] with the given options. Sensible defaults are applied:
 //   - Listens for SIGTERM, SIGINT and SIGQUIT for graceful shutdown.
 //   - A 10-second stop timeout is enforced during shutdown.
@@ -114,6 +127,31 @@ func (a *App) Name() string { return a.opts.name }
 
 // Version returns the application version set via [WithVersion].
 func (a *App) Version() string { return a.opts.version }
+
+// Instance builds an [*Instance] from the app's configured ID, Name and
+// Version, plus the provided endpoint URLs. This is a convenience helper for
+// callers who wish to register with a service registry — it does NOT perform
+// any registration on its own (composable design: the caller chooses whether
+// and how to register).
+func (a *App) Instance(endpoints ...string) *Instance {
+	return &Instance{
+		ID:        a.opts.id,
+		Name:      a.opts.name,
+		Version:   a.opts.version,
+		Endpoints: endpoints,
+	}
+}
+
+// Done returns a channel that is closed when [Run] finishes — either after a
+// normal graceful shutdown or after a server crash. It allows external
+// supervisors to wait for the app to terminate without calling [Stop] or
+// wrapping [Run] in their own error channel. Done is provided for
+// read-only observation; it must not be closed by the caller.
+//
+// Before [Run] is called the channel is open (not closed).
+func (a *App) Done() <-chan struct{} {
+	return a.done
+}
 
 // Run starts the application and blocks until all servers have stopped.
 //

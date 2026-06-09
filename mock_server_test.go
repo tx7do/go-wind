@@ -32,11 +32,9 @@ type mockServer struct {
 	started chan struct{}
 	stopped chan struct{}
 
-	// stopCtx is the context handed to Stop.
 	// stopCtxErr captures ctx.Err() at the exact moment Stop is invoked.
 	// We snapshot the error because the caller will cancel stopCtx via defer
 	// after Stop returns — the reference alone would always read as cancelled.
-	stopCtx    context.Context
 	stopCtxErr error
 	stopCtxMu  sync.Mutex
 }
@@ -90,7 +88,6 @@ func (m *mockServer) Stop(ctx context.Context) error {
 	m.stopCalled.Store(true)
 	m.stopCount.Add(1)
 	m.stopCtxMu.Lock()
-	m.stopCtx = ctx
 	m.stopCtxErr = ctx.Err() // snapshot now, before the caller cancels it
 	m.stopCtxMu.Unlock()
 	close(m.stopped)

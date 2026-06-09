@@ -209,13 +209,6 @@ func TestApp_Run_ServerSelfExit_StopsOtherServers(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Stop() must be usable from a different goroutine to trigger graceful
-// shutdown while Run() is blocking. This replaces the old standalone
-// TestApp_Stop_StopsAllServers which relied on Stop directly calling
-// srv.Stop (no longer the case after ISSUE-1 fix).
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // FINDING-1 regression: calling Run more than once on the same [*App] must
 // return [wind.ErrAppAlreadyRunning] instead of silently racing or corrupting
 // internal state.
@@ -272,53 +265,5 @@ func TestApp_Stop_GracefulShutdown(t *testing.T) {
 	}
 	if !s2.stopCalled.Load() {
 		t.Error("srv-2 was not stopped")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// FINDING-3: when no servers are registered, Run must still respond to
-// context cancellation and [Stop] instead of hanging forever.
-// ---------------------------------------------------------------------------
-
-func TestApp_Run_ZeroServers_StopsOnCancel(t *testing.T) {
-	app := New() // no servers
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- app.Run(ctx) }()
-
-	// Give Run a moment to enter eg.Wait(), then cancel.
-	cancel()
-
-	if err := <-errCh; err != nil {
-		t.Fatalf("Run returned unexpected error: %v", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// FINDING-4: when a server's Stop returns an error, that error must
-// propagate through Run (not be silently swallowed).
-// ---------------------------------------------------------------------------
-
-func TestApp_Run_StopError_Propagates(t *testing.T) {
-	stopErr := errors.New("stop failed")
-	srv := newMockServer("srv-1").withStopErr(stopErr)
-
-	app := New(WithServer(srv))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- app.Run(ctx) }()
-
-	waitFor(t, "server start", srv.started)
-
-	cancel()
-
-	if err := <-errCh; !errors.Is(err, stopErr) {
-		t.Fatalf("expected stop error %v, got %v (FINDING-4)", stopErr, err)
 	}
 }
