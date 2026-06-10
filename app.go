@@ -263,6 +263,7 @@ func (a *App) Run(ctx context.Context) error {
 						"endpoint", srv.Endpoint(), "panic", r)
 				}
 			}()
+			a.Logger().Info(egCtx, "server starting", "endpoint", srv.Endpoint())
 			err = srv.Start(egCtx)
 			if err == nil {
 				a.Logger().Info(egCtx, "server self-exited, triggering shutdown",
@@ -286,9 +287,10 @@ func (a *App) Run(ctx context.Context) error {
 		select {
 		case <-egCtx.Done():
 			// Triggered by a server crash or external cancellation; nothing to do.
-		case <-c:
+		case sig := <-c:
 			// Signal received: cancel the main context, which cascades to egCtx
 			// and triggers all Start goroutines to return.
+			a.Logger().Info(egCtx, "shutdown signal received", "signal", sig.String())
 			a.triggerCancel()
 		}
 		return nil
@@ -297,6 +299,10 @@ func (a *App) Run(ctx context.Context) error {
 	// Phase 1 complete: wait for all Start goroutines and the signal watcher
 	// to return (i.e. shutdown has been triggered).
 	startErr := eg.Wait()
+
+	// The shutdown phases (BeforeStop → Stop → AfterStop) start here.
+	shutdownStart := time.Now()
+	a.Logger().Info(context.Background(), "graceful shutdown initiated")
 
 	// Phase 2: BeforeStop hooks — synchronous, BEFORE any server is stopped.
 	// Each hook gets a FRESH timeout context created at this point, not at
@@ -366,6 +372,8 @@ func (a *App) Run(ctx context.Context) error {
 	// safely after [Done] is closed (happens-before via channel close).
 	a.runErr = runErr
 	a.closeOnce.Do(func() { close(a.done) })
+	a.Logger().Info(context.Background(), "shutdown complete",
+		"duration", time.Since(shutdownStart).String(), "error", runErr)
 	return runErr
 }
 
