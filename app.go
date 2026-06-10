@@ -257,7 +257,12 @@ func (a *App) Run(ctx context.Context) error {
 		eg.Go(func() error {
 			err := srv.Start(egCtx)
 			if err == nil {
+				a.Logger().Info(egCtx, "server self-exited, triggering shutdown",
+					"endpoint", srv.Endpoint())
 				a.triggerCancel()
+			} else if !errors.Is(err, context.Canceled) {
+				a.Logger().Error(egCtx, "server crashed",
+					"endpoint", srv.Endpoint(), "error", err)
 			}
 			return err
 		})
@@ -316,6 +321,8 @@ func (a *App) Run(ctx context.Context) error {
 			stopCtx, stopCancel := context.WithTimeout(context.Background(), a.opts.stopTimeout)
 			defer stopCancel()
 			if err := srv.Stop(stopCtx); err != nil {
+				a.Logger().Error(stopCtx, "server stop failed",
+					"endpoint", srv.Endpoint(), "error", err)
 				stopErrOnce.Do(func() { firstStopErr = err })
 			}
 		}()
