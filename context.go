@@ -20,11 +20,23 @@ type metadataKey struct{}
 type Metadata map[string]string
 
 // NewMetadataContext returns a copy of ctx with the given [Metadata] attached.
+//
+// The provided map is deep-copied so that subsequent mutations by the caller
+// do not affect the value stored in the context.
 func NewMetadataContext(ctx context.Context, md Metadata) context.Context {
-	return context.WithValue(ctx, metadataKey{}, md)
+	return context.WithValue(ctx, metadataKey{}, cloneMetadata(md))
 }
 
 // MetadataFromContext extracts the [Metadata] from ctx, if present.
+//
+// The returned map is shared with the context and other callers. It MUST be
+// treated as read-only: mutating it will corrupt the context value and cause
+// data races when the context is shared across goroutines. To modify metadata,
+// use [WithMetadata], [WithMetadatas], or [WithoutMetadata] which always
+// operate on a private copy.
+//
+// Use [GetMetadata] instead when only a single value is needed — it avoids
+// exposing the underlying map entirely.
 func MetadataFromContext(ctx context.Context) (Metadata, bool) {
 	md, ok := ctx.Value(metadataKey{}).(Metadata)
 	return md, ok
@@ -55,7 +67,49 @@ func WithMetadata(ctx context.Context, key, value string) context.Context {
 		md = cloneMetadata(md)
 	}
 	md[key] = value
-	return NewMetadataContext(ctx, md)
+	return context.WithValue(ctx, metadataKey{}, md)
+}
+
+// WithMetadatas merges the key/value pairs from extra into the context's
+// existing [Metadata], performing a single deep-copy regardless of how many
+// pairs are provided. This is more efficient than calling [WithMetadata]
+// repeatedly when setting multiple keys at once (e.g. reconstructing context
+// from inbound request headers).
+//
+// If extra is empty and no existing metadata is present, ctx is returned
+// unchanged.
+func WithMetadatas(ctx context.Context, extra Metadata) context.Context {
+	existing, ok := MetadataFromContext(ctx)
+	if !ok && len(extra) == 0 {
+		return ctx
+	}
+	md := make(Metadata, len(existing)+len(extra))
+	for k, v := range existing {
+		md[k] = v
+	}
+	for k, v := range extra {
+		md[k] = v
+	}
+	return context.WithValue(ctx, metadataKey{}, md)
+}
+
+// WithoutMetadata returns a new context with the given key removed from its
+// [Metadata]. If the key does not exist or no metadata is present, ctx is
+// returned unchanged.
+//
+// Like [WithMetadata], this operates on a private copy so the parent context
+// is never mutated.
+func WithoutMetadata(ctx context.Context, key string) context.Context {
+	existing, ok := MetadataFromContext(ctx)
+	if !ok {
+		return ctx
+	}
+	if _, exists := existing[key]; !exists {
+		return ctx
+	}
+	md := cloneMetadata(existing)
+	delete(md, key)
+	return context.WithValue(ctx, metadataKey{}, md)
 }
 
 // WithTraceID returns a new context with the given trace ID set in its
