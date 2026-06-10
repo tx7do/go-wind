@@ -10,10 +10,13 @@ package wind
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -63,6 +66,9 @@ type options struct {
 	afterStop  []func(ctx context.Context) error
 
 	servers []transport.Server
+
+	banner     bool
+	instanceID string
 }
 
 // WithID sets the unique identifier of the application. It is typically
@@ -131,6 +137,19 @@ func WithSignal(sigs ...os.Signal) Option {
 	return func(o *App) { o.opts.sigs = sigs }
 }
 
+// WithBanner enables or disables the startup banner. When enabled, App.Run
+// prints the application name, version, appId, instanceId, PID and hostname
+// at startup. Disabled by default to keep output clean.
+func WithBanner(enabled bool) Option {
+	return func(o *App) { o.opts.banner = enabled }
+}
+
+// WithInstanceID sets a custom instance identifier. If not set and banner is
+// enabled, one is auto-generated in the format "{id}-{version}@{hostname}@{random}".
+func WithInstanceID(id string) Option {
+	return func(o *App) { o.opts.instanceID = id }
+}
+
 // New creates an [*App] with the given options. Sensible defaults are applied:
 //   - Listens for SIGTERM, SIGINT and SIGQUIT for graceful shutdown.
 //   - A 10-second stop timeout is enforced during shutdown.
@@ -160,6 +179,19 @@ func (a *App) Name() string { return a.opts.name }
 
 // Version returns the application version set via [WithVersion].
 func (a *App) Version() string { return a.opts.version }
+
+// InstanceID returns the instance identifier. If set via [WithInstanceID],
+// that value is returned. Otherwise an auto-generated ID is returned on
+// first access. The auto-generated format is:
+//
+//	"{id}-{version}@{hostname}@{randomShortHex}"
+func (a *App) InstanceID() string {
+	if a.opts.instanceID != "" {
+		return a.opts.instanceID
+	}
+	a.opts.instanceID = generateInstanceID(a.opts.id, a.opts.version)
+	return a.opts.instanceID
+}
 
 // Logger returns the app-specific logger set via [WithLogger]. If no logger
 // was set, it falls back to the package-level global logger ([log.GetLogger]).
@@ -243,6 +275,10 @@ func (a *App) Run(ctx context.Context) error {
 	a.mu.Lock()
 	a.cancel = cancel
 	a.mu.Unlock()
+
+	if a.opts.banner {
+		a.printBanner(runCtx)
+	}
 
 	eg, egCtx := errgroup.WithContext(runCtx)
 
@@ -420,4 +456,41 @@ func (a *App) triggerCancel() {
 		a.cancel()
 	}
 	a.mu.Unlock()
+}
+
+// printBanner logs the application startup information: name, version,
+// appId, instanceId, PID and hostname. It is called once at the start of
+// [Run] when the banner option is enabled.
+func (a *App) printBanner(ctx context.Context) {
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown"
+	}
+	a.Logger().Info(ctx, "application starting",
+		"name", a.opts.name,
+		"version", a.opts.version,
+		"appId", a.opts.id,
+		"instanceId", a.InstanceID(),
+		"pid", os.Getpid(),
+		"hostname", hostname,
+	)
+}
+
+// generateInstanceID builds a unique instance identifier from the given appId,
+// version, hostname and a random suffix. The format is:
+//
+//	"{appId}-{version}@{hostname}@{randomHex}"
+func generateInstanceID(appID, version string) string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown"
+	}
+	// Remove domain part if present (e.g. "my-host.example.com" → "my-host").
+	hostname = filepath.Base(hostname)
+	random := make([]byte, 10)
+	if _, err := rand.Read(random); err != nil {
+		// Fallback: use timestamp-based pseudo-random if crypto/rand fails.
+		copy(random, []byte(hex.EncodeToString([]byte(time.Now().Format(time.RFC3339Nano)))))
+	}
+	return fmt.Sprintf("%s-%s@%s@%s", appID, version, hostname, hex.EncodeToString(random))
 }
