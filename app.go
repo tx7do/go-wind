@@ -11,6 +11,7 @@ package wind
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"sync"
@@ -254,8 +255,15 @@ func (a *App) Run(ctx context.Context) error {
 		// Start the server. If Start returns an error, errgroup cancels egCtx
 		// (BUG-3). If Start returns nil (server self-exited), we explicitly
 		// trigger a full shutdown so other servers also stop (ISSUE-3).
-		eg.Go(func() error {
-			err := srv.Start(egCtx)
+		eg.Go(func() (err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("wind: server panicked during Start (endpoint %s): %v", srv.Endpoint(), r)
+					a.Logger().Error(egCtx, "server panicked during Start",
+						"endpoint", srv.Endpoint(), "panic", r)
+				}
+			}()
+			err = srv.Start(egCtx)
 			if err == nil {
 				a.Logger().Info(egCtx, "server self-exited, triggering shutdown",
 					"endpoint", srv.Endpoint())
@@ -296,7 +304,7 @@ func (a *App) Run(ctx context.Context) error {
 	// operation and hooks always saw an expired deadline).
 	for _, fn := range a.opts.beforeStop {
 		hookCtx, hookCancel := context.WithTimeout(context.Background(), a.opts.stopTimeout)
-		if err := fn(hookCtx); err != nil {
+		if err := a.runHookSafely(hookCtx, "beforeStop", fn); err != nil {
 			a.Logger().Warn(hookCtx, "beforeStop hook error", "error", err)
 		}
 		hookCancel()
@@ -318,6 +326,14 @@ func (a *App) Run(ctx context.Context) error {
 		stopWg.Add(1)
 		go func() {
 			defer stopWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					panicErr := fmt.Errorf("wind: server panicked during Stop (endpoint %s): %v", srv.Endpoint(), r)
+					a.Logger().Error(context.Background(), "server panicked during Stop",
+						"endpoint", srv.Endpoint(), "panic", r)
+					stopErrOnce.Do(func() { firstStopErr = panicErr })
+				}
+			}()
 			stopCtx, stopCancel := context.WithTimeout(context.Background(), a.opts.stopTimeout)
 			defer stopCancel()
 			if err := srv.Stop(stopCtx); err != nil {
@@ -332,7 +348,7 @@ func (a *App) Run(ctx context.Context) error {
 	// Phase 4: AfterStop hooks — synchronous, AFTER all servers have stopped.
 	for _, fn := range a.opts.afterStop {
 		hookCtx, hookCancel := context.WithTimeout(context.Background(), a.opts.stopTimeout)
-		if err := fn(hookCtx); err != nil {
+		if err := a.runHookSafely(hookCtx, "afterStop", fn); err != nil {
 			a.Logger().Warn(hookCtx, "afterStop hook error", "error", err)
 		}
 		hookCancel()
@@ -371,6 +387,21 @@ func (a *App) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// runHookSafely executes a lifecycle hook, recovering from panics and
+// converting them to errors. This ensures that a panicking hook does not
+// skip subsequent hooks or the Server.Stop phase. If the Server or hook
+// needs its own panic handling (e.g. custom recovery), it may add an inner
+// defer-recover which takes precedence over this safety net.
+func (a *App) runHookSafely(ctx context.Context, name string, fn func(context.Context) error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("wind: %s hook panicked: %v", name, r)
+			a.Logger().Error(ctx, "hook panicked", "hook", name, "panic", r)
+		}
+	}()
+	return fn(ctx)
 }
 
 // triggerCancel safely calls a.cancel if it has been set by [Run]. Safe to

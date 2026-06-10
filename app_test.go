@@ -3,6 +3,7 @@ package wind
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -471,5 +472,149 @@ func TestApp_Err_NilBeforeRunCompletes(t *testing.T) {
 	app := New()
 	if err := app.Err(); err != nil {
 		t.Fatalf("Err() before Run should return nil, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Panic recovery: a panicking Server.Start must be recovered by App.Run,
+// converted to an error, and must still trigger Stop for other servers.
+// Without recover, the entire process would crash.
+// ---------------------------------------------------------------------------
+
+func TestApp_Run_ServerStartPanic_RecoversAndStopsOthers(t *testing.T) {
+	panicSrv := newMockServer("panicky").withStartPanic()
+	healthySrv := newMockServer("healthy")
+
+	app := New(WithServer(panicSrv, healthySrv))
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(context.Background()) }()
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected non-nil error from Start panic, got nil")
+	}
+	if !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("expected panic-converted error, got: %v", err)
+	}
+
+	// The healthy server must have been stopped despite the other's panic.
+	if !healthySrv.stopCalled.Load() {
+		t.Fatal("healthy server was not stopped after Start panic — graceful exit broken")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Panic recovery: a panicking Server.Stop must not crash the process or skip
+// other servers' Stop calls.
+// ---------------------------------------------------------------------------
+
+func TestApp_Run_ServerStopPanic_OthersStillStopped(t *testing.T) {
+	panicSrv := newMockServer("panicky").withStopPanic()
+	healthySrv := newMockServer("healthy")
+
+	app := New(WithServer(panicSrv, healthySrv))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+
+	waitFor(t, "panicky server start", panicSrv.started)
+	waitFor(t, "healthy server start", healthySrv.started)
+
+	cancel()
+
+	// Run should return an error (the panic-converted Stop error).
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected non-nil error from Stop panic, got nil")
+	}
+	if !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("expected panic-converted error, got: %v", err)
+	}
+
+	// The healthy server must still have been stopped.
+	if !healthySrv.stopCalled.Load() {
+		t.Fatal("healthy server was not stopped after another server's Stop panic")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Panic recovery: a panicking BeforeStop hook must not skip subsequent hooks
+// or the Server.Stop phase.
+// ---------------------------------------------------------------------------
+
+func TestApp_Run_BeforeStopPanic_ContinuesShutdown(t *testing.T) {
+	srv := newMockServer("srv-1")
+	hook2Called := atomic.Bool{}
+
+	app := New(
+		WithServer(srv),
+		WithBeforeStop(func(ctx context.Context) error {
+			panic("hook boom")
+		}),
+		WithBeforeStop(func(ctx context.Context) error {
+			hook2Called.Store(true)
+			return nil
+		}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+
+	waitFor(t, "server start", srv.started)
+	cancel()
+
+	// Hook panics are recovered and logged but, like normal hook errors, do
+	// not propagate to Run's return value (log-and-continue policy).
+	err := <-errCh
+	if err != nil {
+		t.Fatalf("Run should return nil for a normal shutdown even with a hook panic, got: %v", err)
+	}
+
+	// The second hook must still have been called.
+	if !hook2Called.Load() {
+		t.Fatal("second beforeStop hook was skipped after first hook panicked")
+	}
+	// The server must still have been stopped.
+	if !srv.stopCalled.Load() {
+		t.Fatal("server was not stopped after beforeStop hook panic")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Panic recovery: a panicking AfterStop hook must not crash the process.
+// Run should return the panic-converted error.
+// ---------------------------------------------------------------------------
+
+func TestApp_Run_AfterStopPanic_RecoversGracefully(t *testing.T) {
+	srv := newMockServer("srv-1")
+
+	app := New(
+		WithServer(srv),
+		WithAfterStop(func(ctx context.Context) error {
+			panic("after boom")
+		}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+
+	waitFor(t, "server start", srv.started)
+	cancel()
+
+	// AfterStop panic is recovered and logged but does not change Run's
+	// return value (log-and-continue policy, same as normal hook errors).
+	err := <-errCh
+	if err != nil {
+		t.Fatalf("Run should return nil for a normal shutdown even with AfterStop panic, got: %v", err)
 	}
 }

@@ -21,6 +21,12 @@ type mockServer struct {
 	selfExit bool
 	// stopErr, if non-nil, is returned by Stop.
 	stopErr error
+	// startPanic, if true, makes Start panic immediately after signaling,
+	// simulating a server that panics during startup.
+	startPanic bool
+	// stopPanic, if true, makes Stop panic after recording context,
+	// simulating a server that panics during shutdown.
+	stopPanic bool
 
 	startCalled atomic.Bool
 	stopCalled  atomic.Bool
@@ -75,11 +81,26 @@ func (m *mockServer) withStopErr(err error) *mockServer {
 	return m
 }
 
+// withStartPanic configures Start to panic immediately after signaling started.
+func (m *mockServer) withStartPanic() *mockServer {
+	m.startPanic = true
+	return m
+}
+
+// withStopPanic configures Stop to panic after recording the context.
+func (m *mockServer) withStopPanic() *mockServer {
+	m.stopPanic = true
+	return m
+}
+
 // Start implements transport.Server. It signals started, then either returns
 // immediately (crash / self-exit) or blocks until ctx is cancelled (normal run).
 func (m *mockServer) Start(ctx context.Context) error {
 	m.startCalled.Store(true)
 	close(m.started)
+	if m.startPanic {
+		panic("mock start panic")
+	}
 	if m.startErr != nil {
 		return m.startErr
 	}
@@ -99,6 +120,9 @@ func (m *mockServer) Stop(ctx context.Context) error {
 	m.stopCtxErr = ctx.Err() // snapshot now, before the caller cancels it
 	m.stopCtxMu.Unlock()
 	close(m.stopped)
+	if m.stopPanic {
+		panic("mock stop panic")
+	}
 	return m.stopErr
 }
 
