@@ -189,9 +189,10 @@ graph LR
 ```text
 go-wind/
 ├── app.go              核心引擎：App 生命周期管理
-├── errors.go           集中错误定义
+├── errors.go           集中错误定义（包级哨兵错误）
 ├── context.go          请求级元数据传播（TraceID / UserID / Metadata）
 ├── instance.go         服务实例模型
+├── errors/             结构化、传输感知的错误模型（WindError）
 ├── transport/          传输层抽象（Server）
 └── log/                日志门面（Logger 接口 + Level + nop 实现 + 全局注册器）
 ```

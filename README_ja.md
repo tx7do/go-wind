@@ -189,9 +189,10 @@ graph LR
 ```
 go-wind/
 ├── app.go              コアエンジン：App ライフサイクル管理
-├── errors.go           エラー定義の一元管理
+├── errors.go           エラー定義の一元管理（パッケージレベルのセンティネルエラー）
 ├── context.go          リクエストスコープメタデータ伝播（TraceID / UserID / Metadata）
 ├── instance.go         サービスインスタンスモデル
+├── errors/             構造化・トランスポート対応エラーモデル（WindError）
 ├── transport/          トランスポート抽象化（Server）
 └── log/                ログファサード（Logger インターフェース + Level + nop 実装 + グローバル登録器）
 ```

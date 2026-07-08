@@ -189,9 +189,10 @@ graph LR
 ```text
 go-wind/
 ├── app.go              Core engine: App lifecycle management
-├── errors.go           Centralized error definitions
+├── errors.go           Centralized error definitions (package-level sentinels)
 ├── context.go          Request-scoped metadata propagation (TraceID / UserID / Metadata)
 ├── instance.go         Service instance model
+├── errors/             Structured, transport-aware error model (WindError)
 ├── transport/          Transport abstraction (Server)
 └── log/                Log facade (Logger interface + Level + nop impl + global registry)
 ```

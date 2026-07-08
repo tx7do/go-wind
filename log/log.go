@@ -1,23 +1,9 @@
-// Package log provides a minimal, backend-agnostic logging interface for the
-// go-wind framework.
-//
-// It defines a small [Logger] interface that any project can adapt to its own
-// backend (stdlib *slog.Logger, zap, zerolog, kratos log, …) with a few lines
-// of glue code. A zero-cost [nopLogger] is included as the default; concrete
-// adapters (slog, LevelFilter, MultiLogger) live in go-wind-plugins.
 package log
 
 import "context"
 
 // Logger is the minimal logging interface used throughout the framework.
-//
-// It is deliberately small (4 log methods + Enabled + With) so that any project can
-// adapt its own backend (the stdlib *slog.Logger, zap, zerolog, kratos log,
-// …) with a few lines of glue code and inject it via [SetLogger].
-//
-// The first argument is always a context, so backends that support it can
-// extract trace ids / request-scoped attributes. Callers that have no context
-// at hand may pass nil.
+// See the package documentation (doc.go) for how to adapt a backend and inject it.
 type Logger interface {
 	// Debug logs a message at DEBUG level with optional structured key/value
 	// pairs passed as args (alternating keys and values).
