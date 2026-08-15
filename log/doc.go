@@ -35,6 +35,17 @@
 // Submodules obtain the shared logger via [GetLogger] without taking a direct
 // dependency on any logging framework.
 //
+// # Global helper functions
+//
+// For convenience, the package also provides global helper functions
+// ([Debug], [Info], [Warn], [Error], [Enabled], [With]) that forward to the
+// current package-level logger:
+//
+//	log.Info(ctx, "server started", "addr", addr)
+//	if log.Enabled(log.LevelDebug) {
+//	    log.Debug(ctx, "detail", expensiveState())
+//	}
+//
 // # Guarding expensive arguments
 //
 // [Logger.Enabled] lets callers avoid constructing expensive log arguments when
