@@ -1,12 +1,10 @@
 <div align="center">
 
+<img src="docs/brand/vortex-tile.svg" width="120" alt="Go Wind" />
+
 # Go Wind
 
-### 极简、可组合的 Go 微服务框架
-
-积木式架构 · 接口驱动 · 零魔法 · 生产就绪
-
-中文 · [English](./README_en.md) · [日本語](./README_ja.md)
+[English](./README_en.md) | **中文** | [日本語](./README_ja.md)
 
 </div>
 

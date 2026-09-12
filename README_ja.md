@@ -1,12 +1,10 @@
 <div align="center">
 
+<img src="docs/brand/vortex-tile.svg" width="120" alt="Go Wind" />
+
 # Go Wind
 
-### ミニマルでコンポーザブルな Go マイクロサービスフレームワーク
-
-レゴ型アーキテクチャ · インターフェース駆動 · ゼロマジック · 本番環境対応
-
-[中文](./README.md) · [English](./README_en.md) · 日本語
+[English](./README_en.md) | [中文](./README.md) | **日本語**
 
 </div>
 

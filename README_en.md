@@ -1,12 +1,10 @@
 <div align="center">
 
+<img src="docs/brand/vortex-tile.svg" width="120" alt="Go Wind" />
+
 # Go Wind
 
-### A Minimalist, Composable Microservice Framework for Go
-
-Lego-like Architecture · Interface-Driven · Zero Magic · Production-Ready
-
-[中文](./README.md) · English · [日本語](./README_ja.md)
+**English** | [中文](./README.md) | [日本語](./README_ja.md)
 
 </div>
 
