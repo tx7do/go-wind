@@ -51,6 +51,37 @@ func TestCodeToHTTP_UnknownCodeFallsBackTo500(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// CodeToHTTP: explicit HTTP statuses (400–599) carried by generated error
+// helpers pass through unchanged. The proto (errors.code) annotations are
+// HTTP statuses, many of which have no gRPC counterpart (402, 405, 418, 598…).
+// ---------------------------------------------------------------------------
+
+func TestCodeToHTTP_ExplicitHTTPStatusPassthrough(t *testing.T) {
+	tests := []struct {
+		name string
+		code uint32
+		want int
+	}{
+		{"explicit 400", 400, 400},
+		{"explicit 402", 402, 402},
+		{"explicit 404", 404, 404},
+		{"explicit 418", 418, 418},
+		{"explicit 423", 423, 423},
+		{"explicit 429", 429, 429},
+		{"explicit 451", 451, 451},
+		{"explicit 598", 598, 598},
+		{"explicit 599", 599, 599},
+		{"below the range is unknown", 399, 500},
+		{"above the range is unknown", 600, 500},
+	}
+	for _, tt := range tests {
+		if got := CodeToHTTP(tt.code); got != tt.want {
+			t.Errorf("CodeToHTTP(%d) = %d, want %d", tt.code, got, tt.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // HTTPToCode: key reverse mappings. The reverse is many-to-one, so each status
 // maps to the single most representative Code.
 // ---------------------------------------------------------------------------

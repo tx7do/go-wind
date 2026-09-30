@@ -6,6 +6,8 @@ package errors
 // dependency. HTTP status conversion is provided in-package by [CodeToHTTP] /
 // [HTTPToCode] (returning int, no net/http dependency); the gRPC conversion is
 // done by callers at the transport boundary via codes.Code(wErr.Code).
+// Besides the gRPC range (0–16), Code may carry an explicit HTTP status
+// (400–599) set by generated error helpers; see [CodeToHTTP].
 //
 // Do NOT change these numeric values: they are kept in one-to-one correspondence
 // with the gRPC protocol, the HTTP mapping table in http.go (see [CodeToHTTP]),

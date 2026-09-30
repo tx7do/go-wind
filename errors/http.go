@@ -13,7 +13,9 @@ package errors
 // The Code→HTTP table follows the canonical mapping used by
 // grpc-httpjson-transcoding, Envoy, and the Google API HTTP/JSON transcoding
 // implementation. It is the authoritative full 17-entry table, in one-to-one
-// correspondence with the Code constants in types.go.
+// correspondence with the Code constants in types.go. On top of the gRPC
+// range (0–16), Code may carry an explicit HTTP status (400–599) set by
+// generated error helpers; see [CodeToHTTP].
 //
 // The reverse HTTP→Code direction is many-to-one (e.g. HTTP 400 may correspond
 // to InvalidArgument, FailedPrecondition, or OutOfRange), so HTTPToCode returns
@@ -60,12 +62,26 @@ var httpToCode = map[int]uint32{
 	504: CodeDeadlineExceeded,
 }
 
-// CodeToHTTP returns the HTTP status code for the given Code. Unknown codes
-// fall back to 500 (Internal Server Error) so that a malformed or
-// future-defined code never accidentally produces a misleading 2xx.
+// CodeToHTTP returns the HTTP status code for the given Code. Two Code ranges
+// are recognized:
+//
+//   - 0–16, the gRPC category range: mapped through the authoritative table
+//     above (grpc-httpjson-transcoding / Envoy / Google transcoding).
+//   - 400–599, explicit HTTP statuses: generated error helpers (the
+//     protoc-gen-wind-errors output) carry the per-reason HTTP status declared
+//     in the proto (errors.code) annotation directly in Code, because many
+//     statuses (402, 405, 418, 598, …) have no gRPC counterpart to express
+//     them with. They pass through unchanged so the transport reproduces the
+//     declared status exactly.
+//
+// Anything else falls back to 500 (Internal Server Error) so that a malformed
+// or future-defined code never accidentally produces a misleading 2xx.
 func CodeToHTTP(code uint32) int {
 	if httpStatus, ok := codeToHTTP[code]; ok {
 		return httpStatus
+	}
+	if code >= 400 && code < 600 {
+		return int(code)
 	}
 	return 500
 }

@@ -14,7 +14,9 @@
 //     stays free of any gRPC dependency; the HTTP conversion is provided
 //     in-package by [CodeToHTTP] / [HTTPToCode] (returning plain int, no
 //     net/http dependency), and the gRPC conversion is done by callers at the
-//     transport boundary via codes.Code(wErr.Code).
+//     transport boundary via codes.Code(wErr.Code). Generated error helpers
+//     may instead carry an explicit HTTP status (400–599) in Code when the
+//     declared status has no gRPC counterpart; see [CodeToHTTP].
 //   - Reason  — a domain-unique, stable identifier such as "ORDER_NOT_FOUND".
 //     This is the value business code matches on with [errors.Is]; it must be
 //     treated as an immutable contract, never localized.
@@ -62,7 +64,9 @@
 //
 // [CodeToHTTP] returns the HTTP status for a Code (unknown codes fall back to
 // 500, never a misleading 2xx). The mapping follows the canonical
-// grpc-httpjson-transcoding / Envoy table and covers all 17 codes.
+// grpc-httpjson-transcoding / Envoy table and covers all 17 codes; explicit
+// HTTP statuses carried in Code (400–599, set by generated error helpers)
+// pass through unchanged.
 //
 // [HTTPToCode] is the reverse direction. Because Code→HTTP is many-to-one
 // (e.g. InvalidArgument, FailedPrecondition, and OutOfRange all map to 400),
