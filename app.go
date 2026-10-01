@@ -62,6 +62,9 @@ type options struct {
 	sigs        []os.Signal
 	stopTimeout time.Duration
 
+	beforeStart []func(ctx context.Context) error
+	afterStart  []func(ctx context.Context) error
+
 	beforeStop []func(ctx context.Context) error
 	afterStop  []func(ctx context.Context) error
 
@@ -93,6 +96,34 @@ func WithVersion(version string) Option {
 // affecting the global state.
 func WithLogger(l log.Logger) Option {
 	return func(o *App) { o.opts.logger = l }
+}
+
+// WithBeforeStart registers a callback invoked BEFORE any server is started
+// when [App.Run] is called. Typical uses include warming up caches,
+// acquiring distributed locks, or final configuration validation.
+//
+// Multiple callbacks are executed in registration order. If any callback
+// returns an error, Run aborts immediately: no servers are started, the
+// error is recorded for [App.Err], and Run returns it.
+func WithBeforeStart(fn func(ctx context.Context) error) Option {
+	return func(o *App) { o.opts.beforeStart = append(o.opts.beforeStart, fn) }
+}
+
+// WithAfterStart registers a callback invoked AFTER all servers have been
+// launched in [App.Run] (each server's Start is running in its own
+// goroutine and binding its listener). Typical uses include registering the
+// service instance with a service registry or announcing readiness.
+//
+// Note for servers that bind to ":0" (OS-assigned port): [Start] spawns the
+// bind asynchronously, so the exact endpoint may not be resolvable the
+// instant this hook runs; callers that need the resolved address should
+// poll [transport.Server.Endpoint] briefly.
+//
+// Multiple callbacks are executed in registration order. If any callback
+// returns an error, Run logs the error, records it for [App.Err], and
+// triggers a graceful shutdown; remaining hooks are skipped.
+func WithAfterStart(fn func(ctx context.Context) error) Option {
+	return func(o *App) { o.opts.afterStart = append(o.opts.afterStart, fn) }
 }
 
 // WithBeforeStop registers a callback invoked BEFORE any server's Stop is
@@ -247,6 +278,10 @@ func (a *App) Err() error {
 
 // Run starts the application and blocks until all servers have stopped.
 //
+// Lifecycle hooks execute around the phases in this order:
+// beforeStart → servers start → afterStart → … shutdown … → beforeStop →
+// servers stop → afterStop.
+//
 // All registered servers are started concurrently inside an errgroup. The
 // method returns when:
 //   - A registered OS signal (SIGTERM/SIGINT/SIGQUIT) is received.
@@ -278,6 +313,17 @@ func (a *App) Run(ctx context.Context) error {
 
 	if a.opts.banner {
 		a.printBanner(runCtx)
+	}
+
+	// Phase 0: BeforeStart hooks — synchronous, BEFORE any server starts.
+	// A hook failure aborts startup entirely: no server is started.
+	for _, fn := range a.opts.beforeStart {
+		if err := a.runHookSafely(runCtx, "beforeStart", fn); err != nil {
+			a.Logger().Error(runCtx, "beforeStart hook error, aborting startup", "error", err)
+			a.runErr = err
+			a.closeOnce.Do(func() { close(a.done) })
+			return err
+		}
 	}
 
 	eg, egCtx := errgroup.WithContext(runCtx)
@@ -331,6 +377,20 @@ func (a *App) Run(ctx context.Context) error {
 		}
 		return nil
 	})
+
+	// Phase 1.5: AfterStart hooks — synchronous, after every server has been
+	// launched. A hook failure triggers a full graceful shutdown; the error
+	// is surfaced from Run after the shutdown completes. Remaining hooks are
+	// skipped.
+	var afterStartErr error
+	for _, fn := range a.opts.afterStart {
+		if err := a.runHookSafely(egCtx, "afterStart", fn); err != nil {
+			a.Logger().Error(egCtx, "afterStart hook error, triggering shutdown", "error", err)
+			afterStartErr = err
+			a.triggerCancel()
+			break
+		}
+	}
 
 	// Phase 1 complete: wait for all Start goroutines and the signal watcher
 	// to return (i.e. shutdown has been triggered).
@@ -398,7 +458,9 @@ func (a *App) Run(ctx context.Context) error {
 
 	// Determine the final error to return and store for [Err].
 	var runErr error
-	if startErr != nil && !errors.Is(startErr, context.Canceled) {
+	if afterStartErr != nil {
+		runErr = afterStartErr
+	} else if startErr != nil && !errors.Is(startErr, context.Canceled) {
 		runErr = startErr
 	} else if firstStopErr != nil {
 		runErr = firstStopErr
